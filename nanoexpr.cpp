@@ -26,6 +26,10 @@ namespace nanoexpr
     REAL,
     INTEGRAL,
     BOOL,
+    POINTER,
+
+    FIRST_ENUM = 512,
+    LAST_ENUM = 1024,
 
     NONE
   };
@@ -34,20 +38,24 @@ namespace nanoexpr
   template<> struct value_traits<ValueType::REAL> { using type = real_t; };
   template<> struct value_traits<ValueType::INTEGRAL> { using type = integral_t; };
   template<> struct value_traits<ValueType::BOOL> { using type = bool; };
+  template<> struct value_traits<ValueType::POINTER> { using type = void*; };
 
   union Value
   {
     real_t real;
     integral_t integral;
     bool boolean;
+    void* ptr;
 
     Value(integral_t integral) : integral(integral) { }
     Value(real_t real) : real(real) { }
     Value(bool boolean) : boolean(boolean) { }
+    template<typename T> Value(T* ptr) : ptr(ptr) { }
 
     integral_t i() const { return integral; }
     real_t r() const { return real; }
     bool b() const { return boolean; }
+    template<typename T> T* p() const { return static_cast<T*>(ptr); }
 
     template<typename T> T as();
     template<ValueType T> typename value_traits<T>::type as() { return as<typename value_traits<T>::type>(); }
@@ -437,10 +445,9 @@ namespace nanoexpr
         using VT = ValueType;
         
         registerBinary(Operator::PLUS, Signature(VT::INTEGRAL, VT::INTEGRAL, VT::INTEGRAL), [](V v1, V v2) { return V(v1.i() + v2.i()); });
+        registerBinary(Operator::PLUS, Signature(VT::REAL, VT::REAL, VT::REAL), [](V v1, V v2) { return V(v1.r() + v2.r()); });
 
         registerBinary(Operator::LES, Signature(VT::BOOL, VT::INTEGRAL, VT::INTEGRAL), [](V v1, V v2) { return V(v1.i() < v2.i()); });
-        registerBinary(Operator::LES, Signature(VT::BOOL, VT::REAL, VT::INTEGRAL), [](V v1, V v2) { return V(v1.r() < v2.i()); });
-        registerBinary(Operator::LES, Signature(VT::BOOL, VT::INTEGRAL, VT::REAL), [](V v1, V v2) { return V(v1.i() < v2.r()); });
         registerBinary(Operator::LES, Signature(VT::BOOL, VT::REAL, VT::REAL), [](V v1, V v2) { return V(v1.r() < v2.r()); });
 
       }
@@ -536,15 +543,38 @@ namespace nanoexpr
         else if (!right) return right;
         else
         {
-          auto entry = env->symbols.find(_op, left.type, right.type);
-          const auto* functor = entry.second;
+          auto leftType = left.type, rightType = right.type;
+          bool retry = true;
+
+          while (retry)
+          {
+            auto entry = env->symbols.find(_op, leftType, rightType);
+            const auto* functor = entry.second;
+
+            if (functor)
+            {
+              assert(functor && functor->args == 2);
+              return CompileResult(entry.first, [function = functor->binary, left = left.lambda, right = right.lambda]() { return function(left(), right()); });
+            }
+
+            /* try with promotion to float if available */
+            retry = false;
+            if (leftType == ValueType::INTEGRAL)
+            {
+              leftType = ValueType::REAL;
+              left.lambda = [old = left.lambda] () { Value v = old(); return Value((real_t)v.i()); };
+              retry = true;
+            }
+            if (rightType == ValueType::INTEGRAL)
+            {
+              rightType = ValueType::REAL; 
+              right.lambda = [old = right.lambda]() { Value v = old(); return Value((real_t)v.i()); };
+              retry = true; 
+            }
+          }
 
           /* no function matching the signature, failure */
-          if (!functor)
-            return CompileResult("no matching function found for "); //TODO finish message
-         
-          assert(functor && functor->args == 2);
-          return CompileResult(entry.first, [function = functor->binary, left = left.lambda, right = right.lambda]() { return function(left(), right()); });
+          return CompileResult("no matching function found for "); //TODO finish message
         }
       }
     };
@@ -784,7 +814,7 @@ int main()
 
     vm::Envinronment env;
 
-    env.set("x", 3);
+    env.set("x", 3.28f);
 
     auto result = ast->compile(&env);
 
