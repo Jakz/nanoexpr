@@ -1,6 +1,7 @@
 #include <cstdlib>
 #include <cstdio>
 #include <iostream>
+#include <cassert>
 
 #include <cstdint>
 #include <unordered_map>
@@ -9,6 +10,7 @@
 #include <regex>
 #include <vector>
 #include <memory>
+#include <array>
 #include <functional>
 #include <cctype>
 
@@ -28,13 +30,19 @@ namespace nanoexpr
     Value(integral_t integral) : integral(integral) { }
     Value(real_t real) : real(real) { }
     Value(bool boolean) : boolean(boolean) { }
+
+    integral_t i() const { return integral; }
+    real_t r() const { return real; }
+    bool b() const { return boolean; }
   };
 
   enum class ValueType
   {
     REAL,
     INTEGRAL,
-    BOOL
+    BOOL,
+
+    NONE
   };
 
   enum class TokenType
@@ -56,9 +64,18 @@ namespace nanoexpr
     LOGICAL_AND,
     LOGICAL_OR,
     
+    EQ,
+    NEQ,
+
+    GEQ,
+    GRE,
+    LEQ,
+    LES,
+
     PLUS,
     MINUS,
     DIVIDE,
+
     MULTIPLY,
     MODULUS
   };
@@ -283,21 +300,121 @@ namespace nanoexpr
     };
   }
 
-  namespace ast
+  namespace vm
   {
+    using unary_operation = std::function<Value(Value)>;
     using binary_operation = std::function<Value(Value, Value)>;
     using lambda_t = std::function<Value()>;
-    
+
+    class Signature
+    {
+    public:
+      std::array<ValueType, 3> types;
+      ValueType returnType;
+
+      Signature(ValueType retType, ValueType a1 = ValueType::NONE, ValueType a2 = ValueType::NONE, ValueType a3 = ValueType::NONE) 
+        : returnType(retType), types({ a1, a2, a3 }) { }
+
+      bool operator==(const Signature& other) const { return types == other.types; }
+    };
+
+    using Opcode = uint64_t;
+
+    struct VariantFunctor
+    {
+      size_t args;
+
+      union
+      {
+        unary_operation unary;
+        binary_operation binary;
+      };
+
+      VariantFunctor(unary_operation unary) : args(1), unary(unary) { }
+      VariantFunctor(binary_operation binary) : args(2), binary(binary) { }
+      VariantFunctor(const VariantFunctor& o) { this->operator=(o); }
+
+
+      VariantFunctor& operator=(const VariantFunctor& o)
+      {
+        this->args = o.args;
+
+        switch (args) {
+          case 1: new (&unary) unary_operation(); this->unary = o.unary; break;
+          case 2: new (&binary) binary_operation(); this->binary = o.binary; break;
+        }
+
+        return *this;
+      }
+
+      ~VariantFunctor()
+      {
+        switch (args) {
+          case 1: unary.~unary_operation(); break;
+          case 2: binary.~binary_operation(); break;
+        }
+      }
+    };
+
+    class Symbols
+    {
+    private:
+      std::unordered_map<Opcode, std::vector<std::pair<Signature, VariantFunctor>>> functors;
+
+      template<typename T> void registerBinary(T opcode, Signature signature, std::function<Value(Value, Value)> functor)
+      {
+        functors[static_cast<Opcode>(opcode)].push_back(std::make_pair(signature, functor));
+      }
+
+    public:
+      template<typename T> std::pair<ValueType, const VariantFunctor*> find(T opcode, ValueType t1, ValueType t2) const
+      {
+        const auto& functorsByOpcode = functors.find(static_cast<Opcode>(opcode));
+
+        if (functorsByOpcode != functors.end())
+        {
+          Signature actual = { ValueType::NONE, t1, t2 };
+          auto it = std::find_if(functorsByOpcode->second.begin(), functorsByOpcode->second.end(), [&actual](const auto& pair) { return pair.first == actual; });
+          
+          if (it != functorsByOpcode->second.end())
+            return std::make_pair(it->first.returnType, &it->second);
+        }
+
+        return std::make_pair(ValueType::NONE, nullptr);
+      }
+
+    public:
+      Symbols()
+      {
+        using V = Value;
+        using VT = ValueType;
+        
+        registerBinary(Operator::PLUS, Signature(VT::INTEGRAL, VT::INTEGRAL, VT::INTEGRAL), [](V v1, V v2) { return V(v1.i() + v2.i()); });
+
+        registerBinary(Operator::LES, Signature(VT::BOOL, VT::INTEGRAL, VT::INTEGRAL), [](V v1, V v2) { return V(v1.i() < v2.i()); });
+
+      }
+    };
+
+    class Envinronment
+    {
+    public:
+      Symbols symbols;
+    };
+  }
+
+  namespace ast
+  {
     class Node 
     { 
     public:
-      virtual lambda_t compile() const = 0;
+      virtual ValueType type(const vm::Envinronment*) const = 0;
+      virtual vm::lambda_t compile(const vm::Envinronment*) const = 0;
     };
 
     class Expression : public Node
     { 
     public:
-      virtual ValueType type() const = 0;
     };
 
     class LiteralValue : public Expression
@@ -308,10 +425,10 @@ namespace nanoexpr
 
     public:
       template<typename T> LiteralValue(ValueType type, T value) : _type(type), _value(value) { }
-      ValueType type() const override { return _type; }
+      ValueType type(const vm::Envinronment*) const override { return _type; }
       const auto& value() const { return _value; }
 
-      lambda_t compile() const override { return [value = _value]() { return value; }; }
+      vm::lambda_t compile(const vm::Envinronment*) const override { return [value = _value]() { return value; }; }
 
     };
 
@@ -321,29 +438,26 @@ namespace nanoexpr
       Operator _op;
       std::unique_ptr<Expression> _left, _right;
 
+      mutable const vm::VariantFunctor* _functor;
+
     public:
-      BinaryExpression(Operator op, Expression* left, Expression* right) : _op(op), _left(left), _right(right) { }
-      ValueType type() const override { return ValueType::BOOL; /*TODO*/ }
+      BinaryExpression(Operator op, Expression* left, Expression* right) : _op(op), _left(left), _right(right), _functor(nullptr){ }
+      
+      ValueType type(const vm::Envinronment* env) const override
+      {
+        auto entry = env->symbols.find(_op, _left->type(env), _right->type(env));
+        _functor = entry.second;
+        assert(_functor && _functor->args == 2);
+        return entry.first;
+      }
 
       const auto& left() const { return _left; }
       const auto& right() const { return _right; }
       Operator op() { return _op; }
 
-      lambda_t compile() const override
-      {
-        binary_operation op;
-
-        switch (_op)
-        {
-          case Operator::PLUS: op = [](Value v1, Value v2) { return Value(v1.integral + v2.integral); }; break;
-          case Operator::MINUS: op = [](Value v1, Value v2) { return Value(v1.integral - v2.integral); }; break;
-          
-          case Operator::MULTIPLY: op = [](Value v1, Value v2) { return Value(v1.integral * v2.integral); }; break;
-          case Operator::DIVIDE: op = [](Value v1, Value v2) { return Value(v1.integral / v2.integral); }; break;
-          case Operator::MODULUS: op = [](Value v1, Value v2) { return Value(v1.integral % v2.integral); }; break;
-        }
-
-        return[op, left = left()->compile(), right = right()->compile()]() { return op(left(), right()); };
+      vm::lambda_t compile(const vm::Envinronment* env) const override
+      {        
+        return[function = _functor->binary, left = left()->compile(env), right = right()->compile(env)]() { return function(left(), right()); };
       }
     };
   }
@@ -421,11 +535,16 @@ namespace nanoexpr
       }
 
     protected:
-      ast::Expression* expression() { return addition(); }
+      ast::Expression* expression() { return equality(); }
 
-      /* addition = multiplication ( [+-] multiplication )* */
+      /* equality = comparison ( [ == != ] comparison ) */
+      ast::Expression* equality() { return binary<&Parser::comparison>(TokenType::OPERATOR, { Operator::EQ, Operator::NEQ }); }
+
+      /* comparison = addition ( [ >= <= > < ] addition ) */
+      ast::Expression* comparison() { return binary<&Parser::addition>(TokenType::OPERATOR, { Operator::GEQ, Operator::GRE, Operator::LEQ, Operator::LES }); }
+
+      /* addition = multiplication ( [+ -] multiplication )* */
       ast::Expression* addition() { return binary<&Parser::multiplication>(TokenType::OPERATOR, { Operator::PLUS, Operator::MINUS }); }
-
 
       /* multiplication = unary ( [* / %] unary )* */
       ast::Expression* multiplication() { return binary<&Parser::primary>(TokenType::OPERATOR, { Operator::MULTIPLY, Operator::DIVIDE, Operator::MODULUS }); }
@@ -469,6 +588,9 @@ nanoexpr::lex::Lexer::Lexer()
     { 
       { Operator::PLUS, "+" }, { Operator::MINUS, "-" },
       { Operator::MULTIPLY, "*" }, { Operator::DIVIDE, "/"}, { Operator::MODULUS, "%" },
+      { Operator::LOGICAL_OR, "||"}, { Operator::LOGICAL_AND, "&&" },
+      { Operator::EQ, "==" }, { Operator::NEQ, "!=" },
+      { Operator::GEQ, ">="}, { Operator::LEQ, "<=" }, { Operator::GRE, ">" }, {Operator::LES, "<" } 
     }));
   rules.emplace_back(new OperatorRule<Symbol>(
     TokenType::SYMBOL, false,
@@ -534,7 +656,7 @@ std::ostream& operator<<(std::ostream& out, const Token& token)
 
 int main()
 {
-  auto input = "(2+4)*3";
+  auto input = "3 < 10";
 
   nanoexpr::lex::Lexer lexer;
   auto result = lexer.parse(input);
@@ -549,11 +671,21 @@ int main()
     nanoexpr::parser::Parser parser(result.tokens);
     auto ast =  parser.parse();
 
-    auto lambda = ast->compile();
+    vm::Envinronment env;
+
+    ValueType type = ast->type(&env);
+    auto lambda = ast->compile(&env);
 
     Value v = lambda();
 
-    std::cout << std::endl << input << " -> " << v.integral << std::endl;
+    std::cout << std::endl << input << " -> ";
+
+    switch (type)
+    {
+      case ValueType::INTEGRAL: std::cout << v.i() << std::endl; break;
+      case ValueType::REAL: std::cout << v.r() << std::endl; break;
+      case ValueType::BOOL: std::cout << (v.b() ? "true" : "false") << std::endl; break;
+    }
   }
 
   
