@@ -11,7 +11,7 @@
 #include <memory>
 #include <cctype>
 
-namespace tinyexpr
+namespace nanoexpr
 {
   using real_t = float;
   using integral_t = int32_t;
@@ -75,9 +75,13 @@ namespace tinyexpr
         if (longEnough)
         {
           const bool isMatching = input.substr(0, expected.length()) == expected;
-          const bool hasTermination = input.length() == expected.length() || std::isspace(input[expected.length()]);
-          return isMatching && hasTermination;
+          return isMatching && hasTermination(input, expected.length());
         }
+      }
+
+      bool hasTermination(std::string_view input, size_t position) const
+      {
+        return input.length() == position || std::isspace(input[position]);
       }
 
     public:
@@ -136,7 +140,7 @@ namespace tinyexpr
         while (p < input.length() && std::isdigit(input[p]))
           ++p;
 
-        if (p > 0 && (!isNegative || p > 1))
+        if (p > 0 && (!isNegative || p > 1) && Rule::hasTermination(input, p))
         {
           std::string copy = std::string(input.substr(0, p));
           return Token(TokenType::INTEGRAL_LITERAL, input.substr(0, p), std::stoi(copy)); //TODO: stoi, choose according to integer_t type?
@@ -184,7 +188,7 @@ namespace tinyexpr
 
 }
 
-tinyexpr::lex::Lexer::Lexer()
+nanoexpr::lex::Lexer::Lexer()
 {
   rules.emplace_back(new WhiteSpaceRule());
   rules.emplace_back(new BooleanRule());
@@ -192,7 +196,7 @@ tinyexpr::lex::Lexer::Lexer()
   
 }
 
-tinyexpr::lex::LexerResult tinyexpr::lex::Lexer::parse(const std::string& text)
+nanoexpr::lex::LexerResult nanoexpr::lex::Lexer::parse(const std::string& text)
 {
   std::vector<Token> tokens;
 
@@ -223,7 +227,7 @@ tinyexpr::lex::LexerResult tinyexpr::lex::Lexer::parse(const std::string& text)
     if (!foundAny)
     {
       auto end = text.find_first_of(" \t\n\r", p);
-      return { {}, false, std::string("unknown token:") + text.substr(p, end - p) };
+      return { {}, false, std::string("unknown token: ") + text.substr(p, end - p) };
     }
   }
 
@@ -233,7 +237,7 @@ tinyexpr::lex::LexerResult tinyexpr::lex::Lexer::parse(const std::string& text)
 }
 
 
-using namespace tinyexpr;
+using namespace nanoexpr;
 std::ostream& operator<<(std::ostream& out, const Token& token)
 {
   switch (token.type()) {
@@ -250,9 +254,9 @@ std::ostream& operator<<(std::ostream& out, const Token& token)
 
 int main()
 {
-  auto input = "101 -10 15 false 20    30";
+  auto input = "101 false -10 15 false 20    30";
 
-  tinyexpr::lex::Lexer lexer;
+  nanoexpr::lex::Lexer lexer;
   auto result = lexer.parse(input);
 
   for (const auto& token : result.tokens)
