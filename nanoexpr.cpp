@@ -13,7 +13,7 @@
 #include <cctype>
 
 namespace nanoexpr
-{
+{  
   using real_t = float;
   using integral_t = int32_t;
   
@@ -47,15 +47,26 @@ namespace nanoexpr
     INTEGRAL_LITERAL,
     BOOLEAN_LITERAL,
 
-    OPERATOR
+    OPERATOR,
+    SYMBOL
   };
 
   enum class Operator
   {
+    LOGICAL_AND,
+    LOGICAL_OR,
+    
     PLUS,
     MINUS,
     DIVIDE,
-    MULTIPLY
+    MULTIPLY,
+    MODULUS
+  };
+
+  enum class Symbol
+  {
+    LPAREN,
+    RPAREN
   };
 
   class Token
@@ -98,21 +109,26 @@ namespace nanoexpr
         if (longEnough)
         {
           const bool isMatching = input.substr(0, expected.length()) == expected;
-          return isMatching && hasTermination(input, expected.length());
+          return isMatching && hasSpaceOrDigitTermination(input, expected.length());
         }
 
         return false;
       }
 
-      bool hasTermination(std::string_view input, size_t position) const
+      bool hasSpaceOrNonDigitTermination(std::string_view input, size_t position) const
       {
-        return input.length() == position || std::isspace(input[position]);
+        return input.length() == position || std::isspace(input[position]) || !std::isdigit(input[position]);
+      }
+
+      bool hasSpaceOrDigitTermination(std::string_view input, size_t position) const
+      {
+        return input.length() == position || std::isspace(input[position]) || std::isdigit(input[position]);
       }
 
       std::string_view fetch(std::string_view input) const
       {
         size_t length = 0;
-        while (length < input.length() && !std::isspace(input[length])) ++length;
+        while (length < input.length() && !std::isspace(input[length]) && !std::isdigit(input[length])) ++length;
         return input.substr(0, length);
       }
 
@@ -172,7 +188,7 @@ namespace nanoexpr
         while (p < input.length() && std::isdigit(input[p]))
           ++p;
 
-        if (p > 0 && (!isNegative || p > 1) && Rule::hasTermination(input, p))
+        if (p > 0 && (!isNegative || p > 1) && Rule::hasSpaceOrNonDigitTermination(input, p))
         {
           std::string copy = std::string(input.substr(0, p));
           return Token(TokenType::INTEGRAL_LITERAL, input.substr(0, p), std::stoi(copy)); //TODO: stoi, choose according to integer_t type?
@@ -202,11 +218,12 @@ namespace nanoexpr
       using mapping_t = std::unordered_map<std::string, T>;
 
     private:
+      bool _requireSpacing;
       TokenType _type;
       mapping_t _mapping;
 
     public:
-      OperatorRule(TokenType type, const std::initializer_list<std::pair<T, std::string>>& mapping) : _type(type)
+      OperatorRule(TokenType type, bool requireSpacing, const std::initializer_list<std::pair<T, std::string>>& mapping) : _type(type), _requireSpacing(requireSpacing)
       {
         std::transform(mapping.begin(), mapping.end(), std::inserter(_mapping, _mapping.end()), 
                        [](const auto& pair) { return std::make_pair(pair.second, pair.first); 
@@ -215,15 +232,31 @@ namespace nanoexpr
 
       Token matches(const std::string_view input) const override
       {
-        std::string token = std::string(Rule::fetch(input));
-
-        if (token.length() > 0)
+        if (_requireSpacing)
         {
-          auto it = _mapping.find(token);
+          std::string token = std::string(Rule::fetch(input));
 
-          if (it != _mapping.end())
-            return Token(_type, token, it->second);
+          if (token.length() > 0)
+          {
+            auto it = _mapping.find(token);
+
+            if (it != _mapping.end())
+              return Token(_type, token, it->second);
+          }
         }
+        else
+        {
+          for (const mapping_t::value_type& entry : _mapping)
+          {
+            if (input.length() >= entry.first.length())
+            {
+              if (input.substr(0, entry.first.length()) == entry.first)
+                return Token(_type, entry.first, entry.second);
+            }
+          }
+        }
+        
+
 
         return TokenType::NONE;
       }
@@ -298,10 +331,17 @@ namespace nanoexpr
 
       lambda_t compile() const override
       {
-        binary_operation op = [](Value v1, Value v2) { return Value(v1.integral + v2.integral); };
+        binary_operation op;
 
-        if (_op == Operator::MINUS)
-          op = [](Value v1, Value v2) { return Value(v1.integral - v2.integral); };
+        switch (_op)
+        {
+          case Operator::PLUS: op = [](Value v1, Value v2) { return Value(v1.integral + v2.integral); }; break;
+          case Operator::MINUS: op = [](Value v1, Value v2) { return Value(v1.integral - v2.integral); }; break;
+          
+          case Operator::MULTIPLY: op = [](Value v1, Value v2) { return Value(v1.integral * v2.integral); }; break;
+          case Operator::DIVIDE: op = [](Value v1, Value v2) { return Value(v1.integral / v2.integral); }; break;
+          case Operator::MODULUS: op = [](Value v1, Value v2) { return Value(v1.integral % v2.integral); }; break;
+        }
 
         return[op, left = left()->compile(), right = right()->compile()]() { return op(left(), right()); };
       }
@@ -329,7 +369,8 @@ namespace nanoexpr
         return matched;
       }
 
-      template<typename T, typename std::enable_if<std::is_enum<T>::value && !std::is_same<T, TokenType>::value, T>::type* = nullptr> bool match(TokenType type, const std::initializer_list<T>& tokens)
+      template<typename T, typename std::enable_if<std::is_enum<T>::value && !std::is_same<T, TokenType>::value, T>::type* = nullptr> 
+      bool match(TokenType type, const std::initializer_list<T>& tokens)
       {
         if (check(type))
         {
@@ -345,29 +386,49 @@ namespace nanoexpr
         return false;
       }
 
-      auto previous() const { return std::prev(token); }
+      auto previous() const 
+      { 
+        return std::prev(token);
+      }
 
-      template<typename T, typename std::enable_if<std::is_enum<T>::value && !std::is_same<T, TokenType>::value, T>::type* = nullptr> T previous()
+      template<typename T, typename std::enable_if<std::is_enum<T>::value && !std::is_same<T, TokenType>::value, T>::type* = nullptr> 
+      T previous()
       {
         return std::prev(token)->token<T>();
       }
 
-    protected:
-      ast::Node* root() { return addition(); }
-
-      ast::Expression* addition()
+      template<typename T, typename std::enable_if<std::is_enum<T>::value && !std::is_same<T, TokenType>::value, T>::type* = nullptr> 
+      bool consume(TokenType type, const std::initializer_list<T>& tokens, std::string error)
       {
-        ast::Expression* left = primary();
+        if (!match(type, tokens))
+          return false;
+      }
 
-        while (match(TokenType::OPERATOR, { Operator::PLUS, Operator::MINUS }))
+    protected:
+      template<ast::Expression* (Parser::*function)()>
+      ast::Expression* binary(TokenType type, const std::initializer_list<Operator>& tokens)
+      {
+        ast::Expression* left = (this->*function)();
+
+        while (match(type, tokens))
         {
           Operator op = previous<Operator>();
-          ast::Expression* right = primary();
+          ast::Expression* right = (this->*function)();
           left = new ast::BinaryExpression(op, left, right);
         }
 
         return left;
       }
+
+    protected:
+      ast::Expression* expression() { return addition(); }
+
+      /* addition = multiplication ( [+-] multiplication )* */
+      ast::Expression* addition() { return binary<&Parser::multiplication>(TokenType::OPERATOR, { Operator::PLUS, Operator::MINUS }); }
+
+
+      /* multiplication = unary ( [* / %] unary )* */
+      ast::Expression* multiplication() { return binary<&Parser::primary>(TokenType::OPERATOR, { Operator::MULTIPLY, Operator::DIVIDE, Operator::MODULUS }); }
 
       /* primary ::= BOOL | INT | FLOAT | '(' expression ')' */
       ast::Expression* primary()
@@ -378,8 +439,12 @@ namespace nanoexpr
           return new ast::LiteralValue(ValueType::INTEGRAL, previous()->value());
         else if (match(TokenType::FLOAT_LITERAL))
           return new ast::LiteralValue(ValueType::REAL, previous()->value());
-
-        //TODO: nested expression
+        else if (match(TokenType::SYMBOL, { Symbol::LPAREN }))
+        {
+          ast::Expression* expr = expression();
+          consume(TokenType::SYMBOL, { Symbol::RPAREN }, "expecting ')' after expression");
+          return expr;
+        }
 
         return nullptr;
       }
@@ -387,7 +452,7 @@ namespace nanoexpr
     public:
       Parser(const lex::token_list& tokens) : tokens(tokens), token(this->tokens.begin()) { }
 
-      ast::Node* parse() { return root(); }
+      ast::Node* parse() { return expression(); }
     };
   }
 
@@ -399,8 +464,17 @@ nanoexpr::lex::Lexer::Lexer()
   rules.emplace_back(new WhiteSpaceRule());
   rules.emplace_back(new BooleanRule());
   rules.emplace_back(new IntegerRule());
-  rules.emplace_back(new OperatorRule<Operator>(TokenType::OPERATOR, { { Operator::PLUS, "+" }, { Operator::MINUS, "-" } }));
-  
+  rules.emplace_back(new OperatorRule<Operator>(
+    TokenType::OPERATOR, false,
+    { 
+      { Operator::PLUS, "+" }, { Operator::MINUS, "-" },
+      { Operator::MULTIPLY, "*" }, { Operator::DIVIDE, "/"}, { Operator::MODULUS, "%" },
+    }));
+  rules.emplace_back(new OperatorRule<Symbol>(
+    TokenType::SYMBOL, false,
+    {
+      { Symbol::LPAREN, "(" },{ Symbol::RPAREN, ")" },
+    }));
 }
 
 nanoexpr::lex::LexerResult nanoexpr::lex::Lexer::parse(const std::string& text)
@@ -451,7 +525,8 @@ std::ostream& operator<<(std::ostream& out, const Token& token)
     case TokenType::BOOLEAN_LITERAL: out << "bool(" << (token.value().boolean ? "true" : "false") << ")"; break;
     case TokenType::FLOAT_LITERAL: out << "float(" << token.value().real << ")"; break;
     case TokenType::INTEGRAL_LITERAL: out << "int(" << token.value().integral << ")"; break;
-    case TokenType::OPERATOR: out << "operator(" << token.textual() << ")"; break;
+    case TokenType::OPERATOR: out << "operator('" << token.textual() << "')"; break;
+    case TokenType::SYMBOL: out << "symbol('" << token.textual() << "')"; break;
   }
 
   return out;
@@ -459,7 +534,7 @@ std::ostream& operator<<(std::ostream& out, const Token& token)
 
 int main()
 {
-  auto input = "-6 + 10 - 4";
+  auto input = "(2+4)*3";
 
   nanoexpr::lex::Lexer lexer;
   auto result = lexer.parse(input);
@@ -478,7 +553,7 @@ int main()
 
     Value v = lambda();
 
-    std::cout << v.integral << std::endl;
+    std::cout << std::endl << input << " -> " << v.integral << std::endl;
   }
 
   
