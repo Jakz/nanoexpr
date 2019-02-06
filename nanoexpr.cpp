@@ -166,7 +166,7 @@ namespace nanoexpr
 
       bool hasSpaceOrDigitTermination(std::string_view input, size_t position) const
       {
-        return input.length() == position || std::isspace(input[position]) || std::isdigit(input[position]);
+        return input.length() == position || !std::isalpha(input[position]);
       }
 
       std::string_view fetch(std::string_view input) const
@@ -410,25 +410,23 @@ namespace nanoexpr
       }
     };
 
-    class Symbols
+    class Functions
     {
     public:
       std::unordered_map<Opcode, std::vector<std::pair<Signature, VariantFunctor>>> functors;
 
-      template<typename T> void registerBinary(T opcode, Signature signature, binary_operation functor)
-      {
-        functors[static_cast<Opcode>(opcode)].push_back(std::make_pair(signature, functor));
-      }
+      template<typename T> void registerBinary(T opcode, Signature signature, binary_operation functor) { functors[static_cast<Opcode>(opcode)].push_back(std::make_pair(signature, functor)); }
+      template<typename T> void registerUnary(T opcode, Signature signature, unary_operation functor) { functors[static_cast<Opcode>(opcode)].push_back(std::make_pair(signature, functor)); }
 
 
-      template<typename T, bool Cmp, template<typename TT> typename F> void registerNumeric(T opcode)
+      template<typename T, bool Cmp, template<typename TT> typename F> void registerNumericBinary(T opcode)
       {
         registerBinary(opcode, Signature(Cmp ? ValueType::BOOL : ValueType::INTEGRAL, ValueType::INTEGRAL, ValueType::INTEGRAL), [](Value v1, Value v2) { return Value(F<integral_t>()(v1.i(), v2.i())); });
         registerBinary(opcode, Signature(Cmp ? ValueType::BOOL : ValueType::REAL, ValueType::REAL, ValueType::REAL), [](Value v1, Value v2) { return Value(F<real_t>()(v1.r(), v2.r())); });
       }
 
     public:
-      template<typename T> std::pair<ValueType, const VariantFunctor*> find(T opcode, ValueType t1, ValueType t2) const
+      template<typename T> std::pair<ValueType, const VariantFunctor*> find(T opcode, ValueType t1, ValueType t2 = ValueType::NONE) const
       {
         const auto& functorsByOpcode = functors.find(static_cast<Opcode>(opcode));
 
@@ -445,23 +443,33 @@ namespace nanoexpr
       }
 
     public:
-      Symbols()
+      Functions()
       {
-        registerNumeric<Operator, false, std::plus>(Operator::PLUS);
-        registerNumeric<Operator, false, std::minus>(Operator::MINUS);
-        registerNumeric<Operator, false, std::multiplies>(Operator::MULTIPLY);
-        registerNumeric<Operator, false, std::divides>(Operator::DIVIDE);
+        using V = Value;
+        using VT = ValueType;
+        
+        /* numerical */
+        registerNumericBinary<Operator, false, std::plus>(Operator::PLUS);
+        registerNumericBinary<Operator, false, std::minus>(Operator::MINUS);
+        registerNumericBinary<Operator, false, std::multiplies>(Operator::MULTIPLY);
+        registerNumericBinary<Operator, false, std::divides>(Operator::DIVIDE);
 
-        registerNumeric<Operator, true, std::equal_to>(Operator::EQ);
-        registerNumeric<Operator, true, std::not_equal_to>(Operator::NEQ);
+        /* equality */
+        registerNumericBinary<Operator, true, std::equal_to>(Operator::EQ);
+        registerNumericBinary<Operator, true, std::not_equal_to>(Operator::NEQ);
 
-        registerNumeric<Operator, true, std::less>(Operator::LES);
-        registerNumeric<Operator, true, std::less_equal>(Operator::LEQ);
-        registerNumeric<Operator, true, std::greater>(Operator::GRE);
-        registerNumeric<Operator, true, std::greater_equal>(Operator::LEQ);
+        /* comparison */
+        registerNumericBinary<Operator, true, std::less>(Operator::LES);
+        registerNumericBinary<Operator, true, std::less_equal>(Operator::LEQ);
+        registerNumericBinary<Operator, true, std::greater>(Operator::GRE);
+        registerNumericBinary<Operator, true, std::greater_equal>(Operator::LEQ);
 
-
-      }
+        /* logical operators */
+        registerBinary(Operator::LOGICAL_AND, Signature(VT::BOOL, VT::BOOL, VT::BOOL), [](V v1, V v2) { return std::logical_and()(v1.b(), v2.b()); });
+        registerBinary(Operator::LOGICAL_OR, Signature(VT::BOOL, VT::BOOL, VT::BOOL), [](V v1, V v2) { return std::logical_or()(v1.b(), v2.b()); });
+        registerBinary(Operator::EQ, Signature(VT::BOOL, VT::BOOL, VT::BOOL), [](V v1, V v2) { return std::equal_to()(v1.b(), v2.b()); });
+        registerBinary(Operator::NEQ, Signature(VT::BOOL, VT::BOOL, VT::BOOL), [](V v1, V v2) { return std::not_equal_to()(v1.b(), v2.b()); });
+        registerUnary(Operator::LOGICAL_NOT, Signature(VT::BOOL, VT::BOOL), [](V v) { return std::logical_not()(v.b()); });      }
     };
 
     class Envinronment
@@ -469,7 +477,7 @@ namespace nanoexpr
     private:
       std::unordered_map<std::string, TypedValue> variables;
     public:
-      Symbols symbols;
+      Functions functions;
 
       void set(const std::string& ident, TypedValue value) { variables.emplace(std::make_pair(ident, value)); }
 
@@ -490,6 +498,16 @@ namespace nanoexpr
       CompileResult(std::string&& message) : success(false), type(ValueType::NONE), message(message) { }
 
       operator bool() const { return success; }
+
+      static const char* nameForType(ValueType type)
+      {
+        switch (type) {
+          case ValueType::BOOL: return "bool";
+          case ValueType::INTEGRAL: return "integral";
+          case ValueType::REAL: return "real";
+          default: return "n/a";
+        }
+      }
     };
     
     class Node 
@@ -535,16 +553,61 @@ namespace nanoexpr
       }
     };
 
+    class UnaryExpression : public Expression
+    {
+    private:
+      Operator _op;
+      std::unique_ptr<Expression> _expr;
+
+    public:
+      UnaryExpression(Operator op, Expression* expr) : _op(op), _expr(expr) { }
+
+      CompileResult compile(const vm::Envinronment* env) const override
+      {
+        auto expr = _expr->compile(env);
+
+        if (!expr) return expr;
+        else
+        {
+          auto type = expr.type;
+          bool retry = true;
+
+          while (retry)
+          {
+            auto entry = env->functions.find(_op, type);
+            const auto* functor = entry.second;
+
+            if (functor)
+            {
+              assert(functor->args == 1);
+              return CompileResult(entry.first, [function = functor->unary, lambda = expr.lambda]() { return function(lambda()); });
+            }
+
+            /* try with promotion to other integral type */
+            //TODO: maybe one way only int -> real
+            retry = false;
+            if (type == ValueType::INTEGRAL)
+            {
+              type = ValueType::REAL;
+              expr.lambda = [old = expr.lambda]() { Value v = old(); return Value((real_t)v.i()); };
+              retry = true;
+            }
+          }
+
+          /* no function matching the signature, failure */
+          return CompileResult("no matching function found for " + std::to_string((int)_op) + " " + CompileResult::nameForType(type)); //TODO finish message
+        }
+      }
+    };
+
     class BinaryExpression : public Expression
     {
     private:
       Operator _op;
       std::unique_ptr<Expression> _left, _right;
 
-      mutable const vm::VariantFunctor* _functor;
-
     public:
-      BinaryExpression(Operator op, Expression* left, Expression* right) : _op(op), _left(left), _right(right), _functor(nullptr){ }
+      BinaryExpression(Operator op, Expression* left, Expression* right) : _op(op), _left(left), _right(right) { }
 
       CompileResult compile(const vm::Envinronment* env) const override
       {
@@ -559,12 +622,12 @@ namespace nanoexpr
 
           while (retry)
           {
-            auto entry = env->symbols.find(_op, leftType, rightType);
+            auto entry = env->functions.find(_op, leftType, rightType);
             const auto* functor = entry.second;
 
             if (functor)
             {
-              assert(functor && functor->args == 2);
+              assert(functor->args == 2);
               return CompileResult(entry.first, [function = functor->binary, left = left.lambda, right = right.lambda]() { return function(left(), right()); });
             }
 
@@ -585,7 +648,7 @@ namespace nanoexpr
           }
 
           /* no function matching the signature, failure */
-          return CompileResult("no matching function found for "); //TODO finish message
+          return CompileResult("no matching function found for " + std::to_string((int)_op) + " " + CompileResult::nameForType(left.type) + ", " + CompileResult::nameForType(right.type)); //TODO finish message
         }
       }
     };
@@ -667,7 +730,10 @@ namespace nanoexpr
       }
 
     protected:
-      ast::Expression* expression() { return equality(); }
+      ast::Expression* expression() { return condition(); }
+
+      /* condition = equality ( [&& ||] condition )* */
+      ast::Expression* condition() { return binary<&Parser::equality>(TokenType::OPERATOR, { Operator::LOGICAL_AND, Operator::LOGICAL_OR }); }
 
       /* equality = comparison ( [ == != ] comparison ) */
       ast::Expression* equality() { return binary<&Parser::comparison>(TokenType::OPERATOR, { Operator::EQ, Operator::NEQ }); }
@@ -682,7 +748,17 @@ namespace nanoexpr
       ast::Expression* multiplication() { return binary<&Parser::unary>(TokenType::OPERATOR, { Operator::MULTIPLY, Operator::DIVIDE, Operator::MODULUS }); }
 
       /* unary = ( [~ !] primary )*/
-      ast::Expression* unary() { return primary(); }
+      ast::Expression* unary()
+      { 
+        if (match(TokenType::OPERATOR, { Operator::LOGICAL_NOT }))
+        {
+          Operator op = previous<Operator>();
+          ast::Expression* expr = primary();
+          return new ast::UnaryExpression(op, expr);
+        }
+
+        return primary();
+      }
 
       /* primary ::= BOOL | INT | FLOAT | '(' expression ')' | IDENTIFIER '(' ( expression ',' ) * ')' */
       ast::Expression* primary()
@@ -738,7 +814,7 @@ nanoexpr::lex::Lexer::Lexer()
     { 
       { Operator::PLUS, "+" }, { Operator::MINUS, "-" },
       { Operator::MULTIPLY, "*" }, { Operator::DIVIDE, "/"}, { Operator::MODULUS, "%" },
-      { Operator::LOGICAL_OR, "||"}, { Operator::LOGICAL_AND, "&&" },
+      { Operator::LOGICAL_OR, "||"}, { Operator::LOGICAL_AND, "&&" }, { Operator::LOGICAL_NOT, "!" },
       { Operator::EQ, "==" }, { Operator::NEQ, "!=" },
       { Operator::GEQ, ">="}, { Operator::LEQ, "<=" }, { Operator::GRE, ">" }, {Operator::LES, "<" } 
     }));
@@ -807,7 +883,7 @@ std::ostream& operator<<(std::ostream& out, const Token& token)
 
 int main()
 {
-  auto input = "2 + 7 < 5 + x";
+  auto input = "!false && !true == !(false || true)";
   bool execute = true;
 
   nanoexpr::lex::Lexer lexer;
