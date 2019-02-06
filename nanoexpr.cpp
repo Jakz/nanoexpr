@@ -81,7 +81,7 @@ namespace nanoexpr
     SKIP,
 
     IDENTIFIER,
-    STRING,
+    /*STRING,*/
     FLOAT_LITERAL,
     INTEGRAL_LITERAL,
     BOOLEAN_LITERAL,
@@ -318,7 +318,7 @@ namespace nanoexpr
         }
         else
         {
-          for (const mapping_t::value_type& entry : _mapping)
+          for (const typename mapping_t::value_type& entry : _mapping)
           {
             if (input.length() >= entry.first.length())
             {
@@ -465,11 +465,11 @@ namespace nanoexpr
         registerNumericBinary<Operator, true, std::greater_equal>(Operator::LEQ);
 
         /* logical operators */
-        registerBinary(Operator::LOGICAL_AND, Signature(VT::BOOL, VT::BOOL, VT::BOOL), [](V v1, V v2) { return std::logical_and()(v1.b(), v2.b()); });
-        registerBinary(Operator::LOGICAL_OR, Signature(VT::BOOL, VT::BOOL, VT::BOOL), [](V v1, V v2) { return std::logical_or()(v1.b(), v2.b()); });
-        registerBinary(Operator::EQ, Signature(VT::BOOL, VT::BOOL, VT::BOOL), [](V v1, V v2) { return std::equal_to()(v1.b(), v2.b()); });
-        registerBinary(Operator::NEQ, Signature(VT::BOOL, VT::BOOL, VT::BOOL), [](V v1, V v2) { return std::not_equal_to()(v1.b(), v2.b()); });
-        registerUnary(Operator::LOGICAL_NOT, Signature(VT::BOOL, VT::BOOL), [](V v) { return std::logical_not()(v.b()); });      }
+        registerBinary(Operator::LOGICAL_AND, Signature(VT::BOOL, VT::BOOL, VT::BOOL), [](V v1, V v2) { return std::logical_and<bool>()(v1.b(), v2.b()); });
+        registerBinary(Operator::LOGICAL_OR, Signature(VT::BOOL, VT::BOOL, VT::BOOL), [](V v1, V v2) { return std::logical_or<bool>()(v1.b(), v2.b()); });
+        registerBinary(Operator::EQ, Signature(VT::BOOL, VT::BOOL, VT::BOOL), [](V v1, V v2) { return std::equal_to<bool>()(v1.b(), v2.b()); });
+        registerBinary(Operator::NEQ, Signature(VT::BOOL, VT::BOOL, VT::BOOL), [](V v1, V v2) { return std::not_equal_to<bool>()(v1.b(), v2.b()); });
+        registerUnary(Operator::LOGICAL_NOT, Signature(VT::BOOL, VT::BOOL), [](V v) { return std::logical_not<bool>()(v.b()); });      }
     };
 
     class Envinronment
@@ -652,6 +652,37 @@ namespace nanoexpr
         }
       }
     };
+    
+    class FunctionCall : public Expression
+    {
+    private:
+      std::string _identifier;
+      std::vector<std::unique_ptr<Expression>> _args;
+      
+    public:
+      FunctionCall(const std::string& identifier, const std::vector<Expression*>& args) : _identifier(identifier), _args(args.size())
+      {
+        for (Expression* arg : args)
+          _args.emplace_back(arg);
+      }
+      
+      CompileResult compile(const vm::Envinronment* env) const override
+      {
+        std::vector<CompileResult> args;
+        std::transform(_args.begin(), _args.end(), std::back_inserter(args), [env] ( const auto& expr) { return expr->compile(env); });
+        
+        auto failed = std::find_if(args.begin(), args.end(), []( const auto& result ) { return !result.success; });
+        
+        if (failed != args.end())
+          return *failed;
+        else
+        {
+          
+        }
+        
+        return CompileResult("fail");
+      }
+    };
   }
  
   namespace parser
@@ -708,6 +739,7 @@ namespace nanoexpr
       {
         if (!match(type, tokens))
           return false;
+        return true;
       }
 
       void advance() { ++token;  }
@@ -760,7 +792,7 @@ namespace nanoexpr
         return primary();
       }
 
-      /* primary ::= BOOL | INT | FLOAT | '(' expression ')' | IDENTIFIER '(' ( expression ',' ) * ')' */
+      /* primary ::= BOOL | INT | FLOAT | '(' expression ')' | IDENTIFIER | IDENTIFIER '(' ( expression ',' ) * ')' */
       ast::Expression* primary()
       {
         if (match(TokenType::BOOLEAN_LITERAL))
@@ -780,7 +812,16 @@ namespace nanoexpr
           /* it's a function call */
           if (!finished() && peek().match(TokenType::SYMBOL, Symbol::LPAREN))
           {
-
+            std::string identifier = previous()->textual();
+            
+            advance();
+            std::vector<ast::Expression*> arguments;
+            
+            /* comma separated expressions as arguments */
+            
+            /* arguments ended */
+            if (!finished() & peek().match(TokenType::SYMBOL, Symbol::RPAREN))
+              return new ast::FunctionCall(identifier, arguments);
           }
           /* it's a raw identifier*/
           else
