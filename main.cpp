@@ -53,7 +53,7 @@ namespace tinyexpr
   public:
     Token(TokenType type) : _type(type) { }
     Token(TokenType type, std::string_view textual) : _type(type), _textual(textual) { }
-    Token(TokenType type, std::string_view textual, integral_t value) : _type(type), _textual(textual), _value(value) { }
+    template<typename T> Token(TokenType type, std::string_view textual, T value) : _type(type), _textual(textual), _value(value) { }
 
     TokenType type() const { return _type; }
     size_t length() const { return _textual.length(); }
@@ -67,6 +67,19 @@ namespace tinyexpr
   {
     class Rule
     {
+    protected:
+      bool matches(std::string_view input, std::string_view expected) const
+      {
+        const bool longEnough = input.length() >= expected.length();
+
+        if (longEnough)
+        {
+          const bool isMatching = input.substr(0, expected.length()) == expected;
+          const bool hasTermination = input.length() == expected.length() || std::isspace(input[expected.length()]);
+          return isMatching && hasTermination;
+        }
+      }
+
     public:
       virtual Token matches(const std::string_view& input) const = 0;
     };
@@ -100,15 +113,10 @@ namespace tinyexpr
 
       Token matches(const std::string_view& input) const override
       {
-        if (input.length() >= _keyword.length())
-        {
-          std::string_view output = input.substr(_keyword.length());
-
-          if (output == _keyword)
-            return Token(_type, _keyword);
-        }
-
-        return TokenType::NONE;
+        if (Rule::matches(input, _keyword))
+          return Token(_type, _keyword);
+        else
+          return TokenType::NONE;
       }
     };
 
@@ -138,7 +146,28 @@ namespace tinyexpr
       }
     };
 
+    class BooleanRule : public Rule
+    {
+      Token matches(const std::string_view& input) const override
+      {
+        if (Rule::matches(input, "false"))
+          return Token(TokenType::BOOLEAN_LITERAL, "false", false);
+        else if (Rule::matches(input, "true"))
+          return Token(TokenType::BOOLEAN_LITERAL, "true", true);
+        else
+          return TokenType::NONE;
+      }
+    };
+
     using token_list = std::vector<Token>;
+    
+    struct LexerResult
+    {
+      token_list tokens;
+      bool success;
+      std::string message;
+    };
+
 
     class Lexer
     {
@@ -147,7 +176,7 @@ namespace tinyexpr
 
     public:
       Lexer();
-      token_list parse(const std::string& text);
+      LexerResult parse(const std::string& text);
     };
   };
  
@@ -158,10 +187,12 @@ namespace tinyexpr
 tinyexpr::lex::Lexer::Lexer()
 {
   rules.emplace_back(new WhiteSpaceRule());
+  rules.emplace_back(new BooleanRule());
   rules.emplace_back(new IntegerRule());
+  
 }
 
-tinyexpr::lex::token_list tinyexpr::lex::Lexer::parse(const std::string& text)
+tinyexpr::lex::LexerResult tinyexpr::lex::Lexer::parse(const std::string& text)
 {
   std::vector<Token> tokens;
 
@@ -190,12 +221,15 @@ tinyexpr::lex::token_list tinyexpr::lex::Lexer::parse(const std::string& text)
     }
 
     if (!foundAny)
-      return {}; //TODO: lex error
+    {
+      auto end = text.find_first_of(" \t\n\r", p);
+      return { {}, false, std::string("unknown token:") + text.substr(p, end - p) };
+    }
   }
 
 
 
-  return tokens;
+  return { tokens, true, "" };
 }
 
 
@@ -203,7 +237,7 @@ using namespace tinyexpr;
 std::ostream& operator<<(std::ostream& out, const Token& token)
 {
   switch (token.type()) {
-    case TokenType::BOOLEAN_LITERAL: out << "bool(" << token.value().boolean << ")"; break;
+    case TokenType::BOOLEAN_LITERAL: out << "bool(" << (token.value().boolean ? "true" : "false") << ")"; break;
     case TokenType::FLOAT_LITERAL: out << "float(" << token.value().real << ")"; break;
     case TokenType::INTEGRAL_LITERAL: out << "int(" << token.value().integral << ")"; break;
     case TokenType::OPERATOR: out << "operator(" << token.textual() << ")"; break;
@@ -216,13 +250,16 @@ std::ostream& operator<<(std::ostream& out, const Token& token)
 
 int main()
 {
-  auto input = "101 10 15 20    30";
+  auto input = "101 -10 15 false 20    30";
 
   tinyexpr::lex::Lexer lexer;
   auto result = lexer.parse(input);
 
-  for (const auto& token : result)
+  for (const auto& token : result.tokens)
     std::cout << token << std::endl;
+
+  if (!result.success)
+    std::cout << "lexer error: " << result.message << std::endl;
   
   getchar();
 
