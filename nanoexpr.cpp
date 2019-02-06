@@ -84,31 +84,23 @@ namespace nanoexpr
 
   enum class Operator
   {
-    LOGICAL_AND,
-    LOGICAL_OR,
+    LOGICAL_AND, LOGICAL_OR, LOGICAL_NOT,
     
-    EQ,
-    NEQ,
+    EQ, NEQ,
+    GEQ, GRE, LEQ, LES,
 
-    GEQ,
-    GRE,
-    LEQ,
-    LES,
+    AND, OR, XOR, NOT,
 
-    PLUS,
-    MINUS,
-    DIVIDE,
+    LSHIFT, RSHIFT,
 
-    MULTIPLY,
-    MODULUS,
-    EXP,
-    
+    PLUS, MINUS, 
+    DIVIDE, MULTIPLY, MODULUS, EXP,    
   };
 
   enum class Symbol
   {
     LPAREN,
-    RPAREN
+    RPAREN,
   };
 
   class Token
@@ -468,12 +460,24 @@ namespace nanoexpr
   }
 
   namespace ast
-  {
+  {    
+    struct CompileResult
+    {
+      bool success;
+      ValueType type;
+      std::string message;
+      vm::lambda_t lambda;
+
+      CompileResult(ValueType type, vm::lambda_t lambda) : success(true), type(type), message(""), lambda(lambda) { }
+      CompileResult(std::string&& message) : success(false), type(ValueType::NONE), message(message) { }
+
+      operator bool() const { return success; }
+    };
+    
     class Node 
     { 
     public:
-      virtual ValueType type(const vm::Envinronment*) const = 0;
-      virtual vm::lambda_t compile(const vm::Envinronment*) const = 0;
+      virtual CompileResult compile(const vm::Envinronment* env) const = 0;
     };
 
     class Expression : public Node
@@ -489,10 +493,11 @@ namespace nanoexpr
 
     public:
       template<typename T> LiteralValue(ValueType type, T value) : _type(type), _value(value) { }
-      ValueType type(const vm::Envinronment*) const override { return _type; }
-      const auto& value() const { return _value; }
 
-      vm::lambda_t compile(const vm::Envinronment*) const override { return [value = _value]() { return value; }; }
+      CompileResult compile(const vm::Envinronment*) const override 
+      { 
+        return CompileResult(_type, [value = _value]() { return value; });
+      }
 
     };
 
@@ -504,8 +509,12 @@ namespace nanoexpr
     public:
       Identifier(const std::string& identifier) : _identifier(identifier) { }
 
-      ValueType type(const vm::Envinronment* env) const override { return env->get(_identifier)->type; }
-      vm::lambda_t compile(const vm::Envinronment* env) const override { return [env = env, id = _identifier]() { return env->get(id)->value; }; }
+      CompileResult compile(const vm::Envinronment* env) const override
+      { 
+        //TODO: here we assume that identifier is already defined in symbol table, is that correct?
+        const TypedValue* value = env->get(_identifier); 
+        return CompileResult(value->type, [value = value->value]() { return value; }); 
+      }
     };
 
     class BinaryExpression : public Expression
@@ -518,22 +527,25 @@ namespace nanoexpr
 
     public:
       BinaryExpression(Operator op, Expression* left, Expression* right) : _op(op), _left(left), _right(right), _functor(nullptr){ }
-      
-      ValueType type(const vm::Envinronment* env) const override
+
+      CompileResult compile(const vm::Envinronment* env) const override
       {
-        auto entry = env->symbols.find(_op, _left->type(env), _right->type(env));
-        _functor = entry.second;
-        assert(_functor && _functor->args == 2);
-        return entry.first;
-      }
+        auto left = _left->compile(env), right = _right->compile(env);
 
-      const auto& left() const { return _left; }
-      const auto& right() const { return _right; }
-      Operator op() { return _op; }
+        if (!left) return left;
+        else if (!right) return right;
+        else
+        {
+          auto entry = env->symbols.find(_op, left.type, right.type);
+          const auto* functor = entry.second;
 
-      vm::lambda_t compile(const vm::Envinronment* env) const override
-      {        
-        return[function = _functor->binary, left = left()->compile(env), right = right()->compile(env)]() { return function(left(), right()); };
+          /* no function matching the signature, failure */
+          if (!functor)
+            return CompileResult("no matching function found for "); //TODO finish message
+         
+          assert(functor && functor->args == 2);
+          return CompileResult(entry.first, [function = functor->binary, left = left.lambda, right = right.lambda]() { return function(left(), right()); });
+        }
       }
     };
   }
@@ -626,7 +638,10 @@ namespace nanoexpr
       ast::Expression* addition() { return binary<&Parser::multiplication>(TokenType::OPERATOR, { Operator::PLUS, Operator::MINUS }); }
 
       /* multiplication = unary ( [* / %] unary )* */
-      ast::Expression* multiplication() { return binary<&Parser::primary>(TokenType::OPERATOR, { Operator::MULTIPLY, Operator::DIVIDE, Operator::MODULUS }); }
+      ast::Expression* multiplication() { return binary<&Parser::unary>(TokenType::OPERATOR, { Operator::MULTIPLY, Operator::DIVIDE, Operator::MODULUS }); }
+
+      /* unary = ( [~ !] primary )*/
+      ast::Expression* unary() { return primary(); }
 
       /* primary ::= BOOL | INT | FLOAT | '(' expression ')' | IDENTIFIER '(' ( expression ',' ) * ')' */
       ast::Expression* primary()
@@ -771,19 +786,23 @@ int main()
 
     env.set("x", 3);
 
-    ValueType type = ast->type(&env);
-    auto lambda = ast->compile(&env);
+    auto result = ast->compile(&env);
 
-    Value v = lambda();
-
-    std::cout << std::endl << input << " -> ";
-
-    switch (type)
+    if (result)
     {
-      case ValueType::INTEGRAL: std::cout << v.i() << std::endl; break;
-      case ValueType::REAL: std::cout << v.r() << std::endl; break;
-      case ValueType::BOOL: std::cout << (v.b() ? "true" : "false") << std::endl; break;
+      Value v = result.lambda();
+
+      std::cout << std::endl << input << " -> ";
+
+      switch (result.type)
+      {
+        case ValueType::INTEGRAL: std::cout << v.i() << std::endl; break;
+        case ValueType::REAL: std::cout << v.r() << std::endl; break;
+        case ValueType::BOOL: std::cout << (v.b() ? "true" : "false") << std::endl; break;
+      }
     }
+    else
+      std::cout << "parser error: " << result.message << std::endl;
   }
 
   getchar();
