@@ -389,7 +389,6 @@ namespace nanoexpr
       VariantFunctor(binary_operation binary) : args(2), binary(binary) { }
       VariantFunctor(const VariantFunctor& o) { this->operator=(o); }
 
-
       VariantFunctor& operator=(const VariantFunctor& o)
       {
         this->args = o.args;
@@ -421,6 +420,13 @@ namespace nanoexpr
         functors[static_cast<Opcode>(opcode)].push_back(std::make_pair(signature, functor));
       }
 
+
+      template<typename T, bool Cmp, template<typename TT> typename F> void registerNumeric(T opcode)
+      {
+        registerBinary(opcode, Signature(Cmp ? ValueType::BOOL : ValueType::INTEGRAL, ValueType::INTEGRAL, ValueType::INTEGRAL), [](Value v1, Value v2) { return Value(F<integral_t>()(v1.i(), v2.i())); });
+        registerBinary(opcode, Signature(Cmp ? ValueType::BOOL : ValueType::REAL, ValueType::REAL, ValueType::REAL), [](Value v1, Value v2) { return Value(F<real_t>()(v1.r(), v2.r())); });
+      }
+
     public:
       template<typename T> std::pair<ValueType, const VariantFunctor*> find(T opcode, ValueType t1, ValueType t2) const
       {
@@ -441,14 +447,19 @@ namespace nanoexpr
     public:
       Symbols()
       {
-        using V = Value;
-        using VT = ValueType;
-        
-        registerBinary(Operator::PLUS, Signature(VT::INTEGRAL, VT::INTEGRAL, VT::INTEGRAL), [](V v1, V v2) { return V(v1.i() + v2.i()); });
-        registerBinary(Operator::PLUS, Signature(VT::REAL, VT::REAL, VT::REAL), [](V v1, V v2) { return V(v1.r() + v2.r()); });
+        registerNumeric<Operator, false, std::plus>(Operator::PLUS);
+        registerNumeric<Operator, false, std::minus>(Operator::MINUS);
+        registerNumeric<Operator, false, std::multiplies>(Operator::MULTIPLY);
+        registerNumeric<Operator, false, std::divides>(Operator::DIVIDE);
 
-        registerBinary(Operator::LES, Signature(VT::BOOL, VT::INTEGRAL, VT::INTEGRAL), [](V v1, V v2) { return V(v1.i() < v2.i()); });
-        registerBinary(Operator::LES, Signature(VT::BOOL, VT::REAL, VT::REAL), [](V v1, V v2) { return V(v1.r() < v2.r()); });
+        registerNumeric<Operator, true, std::equal_to>(Operator::EQ);
+        registerNumeric<Operator, true, std::not_equal_to>(Operator::NEQ);
+
+        registerNumeric<Operator, true, std::less>(Operator::LES);
+        registerNumeric<Operator, true, std::less_equal>(Operator::LEQ);
+        registerNumeric<Operator, true, std::greater>(Operator::GRE);
+        registerNumeric<Operator, true, std::greater_equal>(Operator::LEQ);
+
 
       }
     };
@@ -691,7 +702,7 @@ namespace nanoexpr
         else if (match(TokenType::IDENTIFIER))
         {
           /* it's a function call */
-          if (peek().match(TokenType::SYMBOL, Symbol::LPAREN))
+          if (!finished() && peek().match(TokenType::SYMBOL, Symbol::LPAREN))
           {
 
           }
@@ -796,7 +807,7 @@ std::ostream& operator<<(std::ostream& out, const Token& token)
 
 int main()
 {
-  auto input = "x + 5";
+  auto input = "2 + 7 < 5 + x";
   bool execute = true;
 
   nanoexpr::lex::Lexer lexer;
@@ -814,7 +825,7 @@ int main()
 
     vm::Envinronment env;
 
-    env.set("x", 3.28f);
+    env.set("x", 4.28f);
 
     auto result = ast->compile(&env);
 
@@ -832,7 +843,7 @@ int main()
       }
     }
     else
-      std::cout << "parser error: " << result.message << std::endl;
+      std::cout << "compiler error: " << result.message << std::endl;
   }
 
   getchar();
