@@ -21,6 +21,20 @@ namespace nanoexpr
   
   using operator_enum_t = uint64_t;
 
+  enum class ValueType
+  {
+    REAL,
+    INTEGRAL,
+    BOOL,
+
+    NONE
+  };
+
+  template<ValueType T> struct value_traits{ };
+  template<> struct value_traits<ValueType::REAL> { using type = real_t; };
+  template<> struct value_traits<ValueType::INTEGRAL> { using type = integral_t; };
+  template<> struct value_traits<ValueType::BOOL> { using type = bool; };
+
   union Value
   {
     real_t real;
@@ -34,22 +48,31 @@ namespace nanoexpr
     integral_t i() const { return integral; }
     real_t r() const { return real; }
     bool b() const { return boolean; }
+
+    template<typename T> T as();
+    template<ValueType T> typename value_traits<T>::type as() { return as<typename value_traits<T>::type>(); }
   };
 
-  enum class ValueType
-  {
-    REAL,
-    INTEGRAL,
-    BOOL,
+  template<> real_t Value::as() { return real; }
+  template<> integral_t Value::as() { return integral; }
+  template<> bool Value::as() { return real; }
 
-    NONE
+  struct TypedValue
+  {
+    Value value;
+    ValueType type;
+
+    TypedValue(real_t real) : value(real), type(ValueType::REAL) { }
+    TypedValue(integral_t real) : value(real), type(ValueType::INTEGRAL) { }
+    TypedValue(bool real) : value(real), type(ValueType::BOOL) { }
   };
 
   enum class TokenType
   {
     NONE,
     SKIP,
-    
+
+    IDENTIFIER,
     STRING,
     FLOAT_LITERAL,
     INTEGRAL_LITERAL,
@@ -77,7 +100,9 @@ namespace nanoexpr
     DIVIDE,
 
     MULTIPLY,
-    MODULUS
+    MODULUS,
+    EXP,
+    
   };
 
   enum class Symbol
@@ -112,6 +137,8 @@ namespace nanoexpr
     const auto& textual() const { return _textual; }
 
     bool valid() const { return _type != TokenType::NONE; }
+
+    template<typename T> bool match(TokenType type, T token) const { return _type == type && static_cast<operator_enum_t>(token) == _token; }
   };
 
   namespace lex
@@ -186,6 +213,34 @@ namespace nanoexpr
         else
           return TokenType::NONE;
       }
+    };
+
+    class IdentifierRule : public Rule
+    {
+    public:
+      Token matches(const std::string_view input) const override
+      {
+        size_t p = 0;
+
+        while (p < input.length())
+        {
+          auto c = input[p];
+          
+          /* can't start with digit */
+          if (p == 0 && std::isdigit(c))
+            break;
+          else if (std::isalnum(c) || std::isdigit(c) || c == '_')
+            ++p;
+          else
+            break;
+        }
+
+        if (p > 0)
+          return Token(TokenType::IDENTIFIER, input.substr(0, p));
+        else
+          return TokenType::NONE;
+      }
+      
     };
 
     class IntegerRule : public Rule
@@ -358,10 +413,10 @@ namespace nanoexpr
 
     class Symbols
     {
-    private:
+    public:
       std::unordered_map<Opcode, std::vector<std::pair<Signature, VariantFunctor>>> functors;
 
-      template<typename T> void registerBinary(T opcode, Signature signature, std::function<Value(Value, Value)> functor)
+      template<typename T> void registerBinary(T opcode, Signature signature, binary_operation functor)
       {
         functors[static_cast<Opcode>(opcode)].push_back(std::make_pair(signature, functor));
       }
@@ -373,7 +428,7 @@ namespace nanoexpr
 
         if (functorsByOpcode != functors.end())
         {
-          Signature actual = { ValueType::NONE, t1, t2 };
+          Signature actual = Signature(ValueType::NONE, t1, t2);
           auto it = std::find_if(functorsByOpcode->second.begin(), functorsByOpcode->second.end(), [&actual](const auto& pair) { return pair.first == actual; });
           
           if (it != functorsByOpcode->second.end())
@@ -392,14 +447,23 @@ namespace nanoexpr
         registerBinary(Operator::PLUS, Signature(VT::INTEGRAL, VT::INTEGRAL, VT::INTEGRAL), [](V v1, V v2) { return V(v1.i() + v2.i()); });
 
         registerBinary(Operator::LES, Signature(VT::BOOL, VT::INTEGRAL, VT::INTEGRAL), [](V v1, V v2) { return V(v1.i() < v2.i()); });
+        registerBinary(Operator::LES, Signature(VT::BOOL, VT::REAL, VT::INTEGRAL), [](V v1, V v2) { return V(v1.r() < v2.i()); });
+        registerBinary(Operator::LES, Signature(VT::BOOL, VT::INTEGRAL, VT::REAL), [](V v1, V v2) { return V(v1.i() < v2.r()); });
+        registerBinary(Operator::LES, Signature(VT::BOOL, VT::REAL, VT::REAL), [](V v1, V v2) { return V(v1.r() < v2.r()); });
 
       }
     };
 
     class Envinronment
     {
+    private:
+      std::unordered_map<std::string, TypedValue> variables;
     public:
       Symbols symbols;
+
+      void set(const std::string& ident, TypedValue value) { variables.emplace(std::make_pair(ident, value)); }
+
+      const TypedValue* get(const std::string& identifier) const { auto it = variables.find(identifier); return it != variables.end() ? &it->second : nullptr; }
     };
   }
 
@@ -430,6 +494,18 @@ namespace nanoexpr
 
       vm::lambda_t compile(const vm::Envinronment*) const override { return [value = _value]() { return value; }; }
 
+    };
+
+    class Identifier : public Expression
+    {
+    private:
+      std::string _identifier;
+
+    public:
+      Identifier(const std::string& identifier) : _identifier(identifier) { }
+
+      ValueType type(const vm::Envinronment* env) const override { return env->get(_identifier)->type; }
+      vm::lambda_t compile(const vm::Envinronment* env) const override { return [env = env, id = _identifier]() { return env->get(id)->value; }; }
     };
 
     class BinaryExpression : public Expression
@@ -479,7 +555,7 @@ namespace nanoexpr
       {
         bool matched = check(type);
         if (matched)
-          ++token;
+          advance();
         return matched;
       }
 
@@ -492,7 +568,7 @@ namespace nanoexpr
           bool matched = std::find(tokens.begin(), tokens.end(), value) != tokens.end();
 
           if (matched)
-            ++token;
+            advance();
 
           return matched;
         }
@@ -517,6 +593,9 @@ namespace nanoexpr
         if (!match(type, tokens))
           return false;
       }
+
+      void advance() { ++token;  }
+      const Token& peek() const { return *token;  }
 
     protected:
       template<ast::Expression* (Parser::*function)()>
@@ -549,7 +628,7 @@ namespace nanoexpr
       /* multiplication = unary ( [* / %] unary )* */
       ast::Expression* multiplication() { return binary<&Parser::primary>(TokenType::OPERATOR, { Operator::MULTIPLY, Operator::DIVIDE, Operator::MODULUS }); }
 
-      /* primary ::= BOOL | INT | FLOAT | '(' expression ')' */
+      /* primary ::= BOOL | INT | FLOAT | '(' expression ')' | IDENTIFIER '(' ( expression ',' ) * ')' */
       ast::Expression* primary()
       {
         if (match(TokenType::BOOLEAN_LITERAL))
@@ -563,6 +642,20 @@ namespace nanoexpr
           ast::Expression* expr = expression();
           consume(TokenType::SYMBOL, { Symbol::RPAREN }, "expecting ')' after expression");
           return expr;
+        }
+        else if (match(TokenType::IDENTIFIER))
+        {
+          /* it's a function call */
+          if (peek().match(TokenType::SYMBOL, Symbol::LPAREN))
+          {
+
+          }
+          /* it's a raw identifier*/
+          else
+          {
+            return new ast::Identifier(previous()->textual());
+          }
+            
         }
 
         return nullptr;
@@ -583,6 +676,7 @@ nanoexpr::lex::Lexer::Lexer()
   rules.emplace_back(new WhiteSpaceRule());
   rules.emplace_back(new BooleanRule());
   rules.emplace_back(new IntegerRule());
+  rules.emplace_back(new IdentifierRule());
   rules.emplace_back(new OperatorRule<Operator>(
     TokenType::OPERATOR, false,
     { 
@@ -649,6 +743,7 @@ std::ostream& operator<<(std::ostream& out, const Token& token)
     case TokenType::INTEGRAL_LITERAL: out << "int(" << token.value().integral << ")"; break;
     case TokenType::OPERATOR: out << "operator('" << token.textual() << "')"; break;
     case TokenType::SYMBOL: out << "symbol('" << token.textual() << "')"; break;
+    case TokenType::IDENTIFIER: out << "identifier(" << token.textual() << ")"; break;
   }
 
   return out;
@@ -656,7 +751,8 @@ std::ostream& operator<<(std::ostream& out, const Token& token)
 
 int main()
 {
-  auto input = "3 < 10";
+  auto input = "x + 5";
+  bool execute = true;
 
   nanoexpr::lex::Lexer lexer;
   auto result = lexer.parse(input);
@@ -666,12 +762,14 @@ int main()
 
   if (!result.success)
     std::cout << "lexer error: " << result.message << std::endl;
-  else
-  {
+  else if (execute)
+  {    
     nanoexpr::parser::Parser parser(result.tokens);
     auto ast =  parser.parse();
 
     vm::Envinronment env;
+
+    env.set("x", 3);
 
     ValueType type = ast->type(&env);
     auto lambda = ast->compile(&env);
@@ -688,7 +786,6 @@ int main()
     }
   }
 
-  
   getchar();
 
   return 0;
