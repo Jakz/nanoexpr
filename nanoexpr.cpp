@@ -253,24 +253,33 @@ namespace nanoexpr
   namespace ast
   {
     using binary_operation = std::function<Value(Value, Value)>;
+    using lambda_t = std::function<Value()>;
     
-    class Node { };
+    class Node 
+    { 
+    public:
+      virtual lambda_t compile() const = 0;
+    };
+
     class Expression : public Node
     { 
     public:
       virtual ValueType type() const = 0;
     };
 
-    class Value : public Expression
+    class LiteralValue : public Expression
     {
     private:
       ValueType _type;
-      nanoexpr::Value _value;
+      Value _value;
 
     public:
-      template<typename T> Value(ValueType type, T value) : _type(type), _value(value) { }
+      template<typename T> LiteralValue(ValueType type, T value) : _type(type), _value(value) { }
       ValueType type() const override { return _type; }
       const auto& value() const { return _value; }
+
+      lambda_t compile() const override { return [value = _value]() { return value; }; }
+
     };
 
     class BinaryExpression : public Expression
@@ -283,9 +292,19 @@ namespace nanoexpr
       BinaryExpression(Operator op, Expression* left, Expression* right) : _op(op), _left(left), _right(right) { }
       ValueType type() const override { return ValueType::BOOL; /*TODO*/ }
 
-      const auto& left() { return _left; }
-      const auto& right() { return _right; }
+      const auto& left() const { return _left; }
+      const auto& right() const { return _right; }
       Operator op() { return _op; }
+
+      lambda_t compile() const override
+      {
+        binary_operation op = [](Value v1, Value v2) { return Value(v1.integral + v2.integral); };
+
+        if (_op == Operator::MINUS)
+          op = [](Value v1, Value v2) { return Value(v1.integral - v2.integral); };
+
+        return[op, left = left()->compile(), right = right()->compile()]() { return op(left(), right()); };
+      }
     };
   }
  
@@ -354,11 +373,11 @@ namespace nanoexpr
       ast::Expression* primary()
       {
         if (match(TokenType::BOOLEAN_LITERAL))
-          return new ast::Value(ValueType::BOOL, previous()->value());
+          return new ast::LiteralValue(ValueType::BOOL, previous()->value());
         else if (match(TokenType::INTEGRAL_LITERAL))
-          return new ast::Value(ValueType::INTEGRAL, previous()->value());
+          return new ast::LiteralValue(ValueType::INTEGRAL, previous()->value());
         else if (match(TokenType::FLOAT_LITERAL))
-          return new ast::Value(ValueType::REAL, previous()->value());
+          return new ast::LiteralValue(ValueType::REAL, previous()->value());
 
         //TODO: nested expression
 
@@ -440,7 +459,7 @@ std::ostream& operator<<(std::ostream& out, const Token& token)
 
 int main()
 {
-  auto input = "6 + 10";
+  auto input = "-6 + 10 - 4";
 
   nanoexpr::lex::Lexer lexer;
   auto result = lexer.parse(input);
@@ -454,6 +473,12 @@ int main()
   {
     nanoexpr::parser::Parser parser(result.tokens);
     auto ast =  parser.parse();
+
+    auto lambda = ast->compile();
+
+    Value v = lambda();
+
+    std::cout << v.integral << std::endl;
   }
 
   
