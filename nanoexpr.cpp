@@ -51,18 +51,22 @@ namespace nanoexpr
     Value(bool boolean) : boolean(boolean) { }
     template<typename T> Value(T* ptr) : ptr(ptr) { }
 
-    integral_t i() const { return integral; }
-    real_t r() const { return real; }
-    bool b() const { return boolean; }
-    template<typename T> T* p() const { return static_cast<T*>(ptr); }
+    inline integral_t i() const { return integral; }
+    inline real_t r() const { return real; }
+    inline bool b() const { return boolean; }
+    template<typename T> inline T* p() const { return static_cast<T*>(ptr); }
 
-    template<typename T> T as();
+    template<typename T, typename std::enable_if<!std::is_enum<T>::value, int>::type* = nullptr> T as() const;
+    template<typename T, typename std::enable_if<std::is_enum<T>::value, int>::type* = nullptr> inline T as() const { return static_cast<T>(as<integral_t>()); }
+
+
+
     template<ValueType T> typename value_traits<T>::type as() { return as<typename value_traits<T>::type>(); }
   };
 
-  template<> real_t Value::as() { return real; }
-  template<> integral_t Value::as() { return integral; }
-  template<> bool Value::as() { return real; }
+  template<> real_t Value::as() const { return real; }
+  template<> integral_t Value::as() const { return integral; }
+  template<> bool Value::as() const { return real; }
 
   struct TypedValue
   {
@@ -78,17 +82,15 @@ namespace nanoexpr
   {
     enum class TokenType
     {
-      NONE,
-      SKIP,
+      NONE, SKIP,
 
       IDENTIFIER,
-      /*STRING,*/
+      STRING,
       FLOAT_LITERAL,
       INTEGRAL_LITERAL,
       BOOLEAN_LITERAL,
 
-      OPERATOR,
-      SYMBOL
+      OPERATOR, SYMBOL
     };
 
     class Token
@@ -110,6 +112,7 @@ namespace nanoexpr
       size_t length() const { return _textual.length(); }
       const Value& value() const { return _value; }
       const auto& textual() const { return _textual; }
+      const auto& string() const { return _textual.substr(1, _textual.length() - 2); }
 
       bool valid() const { return _type != TokenType::NONE; }
 
@@ -216,6 +219,46 @@ namespace nanoexpr
       
     };
 
+    class StringRule : public Rule
+    {
+      static constexpr char delim = '\'';
+    public:
+      Token matches(const std::string_view input) const override
+      {
+        size_t p = 0;
+
+        if (input[p] == delim)
+        {
+          ++p;
+          
+          while (true)
+          {
+            if (p >= input.length()) /* end before closing string*/
+              return TokenType::NONE;
+            else if (p == delim)
+              return Token(TokenType::STRING, input.substr(0, p));
+            else //TODO: manage escape \delim
+              ++p;
+          }
+        }
+      }
+    };
+
+    class FloatingRule : public Rule
+    {
+    public:
+      Token matches(const std::string_view input) const override
+      {
+        real_t dest;
+        bool success = sscanf_s(input.data(), "%f", &dest) == 1;
+
+        if (success)
+          return Token(TokenType::FLOAT_LITERAL, std::to_string(dest), dest);
+
+        return TokenType::NONE;
+      }
+    };
+
     class IntegerRule : public Rule
     {
     public:
@@ -229,6 +272,8 @@ namespace nanoexpr
           isNegative = true;
           ++p;
         }
+        else if (input[p] == '+')
+          ++p;
 
         while (p < input.length() && std::isdigit(input[p]))
           ++p;
@@ -433,15 +478,57 @@ namespace nanoexpr
       Functions() { init(); }
     };
 
+    class Enums
+    {
+    public:
+      using utype = integral_t;
+      using enum_map_t = std::unordered_map<std::string, std::unordered_map<std::string, utype>>;
+
+      template<typename T> using typed_pair = std::pair<std::string_view, T>;
+      using init_pair = std::pair<std::string_view, uint64_t>;
+
+    private:
+      enum_map_t mapping;
+
+    public:
+      template<typename T> void registerEnum(const std::string& name, const std::initializer_list<typed_pair<T>>& entries)
+      {
+        auto& data = mapping[name];
+
+        std::transform(entries.begin(), entries.end(), std::inserter(data, data.end()), [](const typed_pair<T>& pair) {
+          return std::make_pair(std::string(pair.first), static_cast<utype>(pair.second));
+        });
+      }
+
+      std::pair<bool, Value> findEnum(const std::string& name, const std::string& valueName) const
+      {
+        auto data = mapping.find(name);
+
+        if (data != mapping.end())
+        {
+          auto value = data->second.find(valueName);
+          if (value != data->second.end())
+            return std::make_pair(true, Value(value->second));
+
+        }
+
+        return std::make_pair(false, Value(0));
+      }
+    };
+
     class Environment
     {
     private:
       const Functions* functions;
+      const Enums* enums;
+
       std::unordered_map<std::string, TypedValue> variables;
     public:
-      Environment(const Functions* functions) : functions(functions) { }
+      Environment(const Functions* functions, const Enums* enums) : functions(functions), enums(enums) { }
 
       std::pair<ValueType, const VariantFunctor*> findFunction(const opcode_t& opcode, ValueType t1, ValueType t2 = ValueType::NONE, ValueType t3 = ValueType::NONE) const { return functions->find(opcode, t1, t2, t3); }
+      auto findEnum(const std::string& name, const std::string& value) const { return enums->findEnum(name, value); }
+
       void set(const std::string& ident, TypedValue value) { variables.emplace(std::make_pair(ident, value)); }
       const TypedValue* get(const std::string& identifier) const { auto it = variables.find(identifier); return it != variables.end() ? &it->second : nullptr; }
     };
@@ -512,6 +599,29 @@ namespace nanoexpr
       }
 
       std::string textual(size_t indent = 0) const override { return std::string(indent, ' ') + "identifier(" + _identifier + ")\n"; }
+    };
+
+    class EnumValue : public Expression
+    {
+    private:
+      std::string _enumName;
+      std::string _enumValue;
+
+    public:
+      EnumValue(const std::string& enumName, const std::string& enumValue) : _enumName(enumName), _enumValue(enumValue) { }
+
+      CompileResult compile(const vm::Environment* env) const override
+      {
+        auto value = env->findEnum(_enumName, _enumValue);
+
+        if (value.first)
+          return CompileResult(ValueType::INTEGRAL, [value = value.second] () { return value; });
+
+        return CompileResult("Enum value " + _enumName + "::" + _enumValue + " not found");
+      }
+
+      std::string textual(size_t indent = 0) const override { return std::string(indent, ' ') + "enum(" + _enumName + "::" + _enumValue + ")\n"; }
+
     };
     
     class FunctionCall : public Expression
@@ -739,6 +849,20 @@ namespace nanoexpr
                 arguments.push_back(expression());
             }
           }
+          /* it's an enum reference */
+          else if (!finished() && peek().match(TokenType::SYMBOL, "::"))
+          {
+            std::string enumName = previous()->textual();
+            advance();
+
+            if (finished() || !match(TokenType::IDENTIFIER))
+              return fail("expecting an identifier after enum name");
+            else
+            {
+              std::string enumValue = previous()->textual();
+              return new ast::EnumValue(enumName, enumValue);
+            }
+          }
           /* it's a raw identifier*/
           else
           {
@@ -749,6 +873,8 @@ namespace nanoexpr
 
         return nullptr;
       }
+
+      ast::Expression* fail(const std::string& message) { return nullptr; }
 
     public:
       explicit Parser(const lex::token_list& tokens) : tokens(tokens), token(this->tokens.begin()) { }
@@ -797,12 +923,15 @@ void nanoexpr::vm::Functions::init()
   /* builtins */
   registerFreeUnaryFunction<real_t, real_t, std::abs>("abs", ValueType::REAL, ValueType::REAL);
   registerFreeUnaryFunction<integral_t, integral_t, std::abs>("abs", ValueType::INTEGRAL, ValueType::INTEGRAL);
+  registerFreeUnaryFunction<real_t, real_t, std::sqrt>("sqrt", ValueType::REAL, ValueType::REAL);
+
 }
 
 nanoexpr::lex::Lexer::Lexer()
 {
   rules.emplace_back(new WhiteSpaceRule());
   rules.emplace_back(new BooleanRule());
+  rules.emplace_back(new FloatingRule());
   rules.emplace_back(new IntegerRule());
   rules.emplace_back(new IdentifierRule());
   rules.emplace_back(new OperatorRule(TokenType::OPERATOR, false,
@@ -812,7 +941,7 @@ nanoexpr::lex::Lexer::Lexer()
       "==", "!=", ">=", "<=", ">", "<"
     }
   ));
-  rules.emplace_back(new OperatorRule(TokenType::SYMBOL, false, { "(", ")" }));
+  rules.emplace_back(new OperatorRule(TokenType::SYMBOL, false, { "(", ")", "::" }));
 }
 
 nanoexpr::lex::LexerResult nanoexpr::lex::Lexer::parse(const std::string& text)
@@ -863,6 +992,8 @@ std::ostream& operator<<(std::ostream& out, const lex::Token& token)
     case lex::TokenType::OPERATOR: out << "operator('" << token.textual() << "')"; break;
     case lex::TokenType::SYMBOL: out << "symbol('" << token.textual() << "')"; break;
     case lex::TokenType::IDENTIFIER: out << "identifier(" << token.textual() << ")"; break;
+    case lex::TokenType::STRING: out << "string(" << token.string()  << ")"; break;
+
   }
 
   return out;
@@ -870,7 +1001,7 @@ std::ostream& operator<<(std::ostream& out, const lex::Token& token)
 
 int main()
 {
-  auto input = "~5";
+  auto input = "10 'foobar' 50";
   bool execute = true;
 
   nanoexpr::lex::Lexer lexer;
@@ -887,7 +1018,13 @@ int main()
     auto ast =  parser.parse();
 
     vm::Functions* functions = new vm::Functions();
-    vm::Environment env(functions);
+    vm::Enums* enums = new vm::Enums();
+
+    enum class FooEnum { FIELD = 5, OTHER_FIELD = 100};
+    enums->registerEnum<FooEnum>("FooEnum", { {"FIELD", FooEnum::FIELD }, {"OTHER_FIELD", FooEnum::OTHER_FIELD } });
+
+
+    vm::Environment env(functions, enums);
 
     env.set("x", 4.28f);
 
@@ -896,9 +1033,11 @@ int main()
     if (result)
     {
       std::cout << std::endl << ast->textual();
-      
-      
+            
       Value v = result.lambda();
+
+      FooEnum ev = v.as<FooEnum>();
+
 
       std::cout << std::endl << input << " -> ";
 
