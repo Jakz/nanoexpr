@@ -249,13 +249,44 @@ namespace nanoexpr
     public:
       Token matches(const std::string_view input) const override
       {
-        real_t dest;
-        bool success = sscanf_s(input.data(), "%f", &dest) == 1;
+        size_t s = 0, p = 0;
+        bool finished = false, failed = false;
 
-        if (success)
-          return Token(TokenType::FLOAT_LITERAL, std::to_string(dest), dest);
+        while (p < input.length() && !finished)
+        {
+          auto c = input[p];
+          
+          if (s == 0)
+          {
+            if (c == '-' || c == '+')
+              ++s;
+            else if (std::isdigit(c)) { ++s; --p; }
+            else { failed = true; finished = true; }
+          }
+          else if (s == 1)
+          {
+            if (std::isdigit(c));
+            else if (c == '.') { ++s; }
+          }
+          else if (s == 2)
+          {
+            if (Rule::hasSpaceOrNonDigitTermination(input, p))
+            {
+              finished = true;
+              break;
+            }
+          }
 
-        return TokenType::NONE;
+          ++p;
+        }
+
+        if (!failed)
+        {
+          std::string copy = std::string(input.substr(0, p));
+          return Token(TokenType::FLOAT_LITERAL, copy, std::stof(copy));
+        }
+        else
+          return TokenType::NONE;
       }
     };
 
@@ -999,9 +1030,16 @@ std::ostream& operator<<(std::ostream& out, const lex::Token& token)
   return out;
 }
 
+template<size_t COUNT> void benchmark(const std::string& script, std::function<float(float)> native, float arg);
+
 int main()
 {
-  auto input = "10 'foobar' 50";
+  benchmark<10000>("(1.0/(a+1)+2/(a+2)+3/(a+3))", [](float a) { return 1.0f / (a + 1) + 2 / (a + 2) + 3 / (a + 3); }, 2.21f);
+  getchar();
+
+  
+  return 0;
+  auto input = "(1.0/(a+1)+2/(a+2)+3/(a+3))";
   bool execute = true;
 
   nanoexpr::lex::Lexer lexer;
@@ -1026,7 +1064,7 @@ int main()
 
     vm::Environment env(functions, enums);
 
-    env.set("x", 4.28f);
+    env.set("a", 2.21f);
 
     auto result = ast->compile(&env);
 
@@ -1055,4 +1093,57 @@ int main()
   getchar();
 
   return 0;
+}
+
+
+
+#include <chrono>
+
+template<size_t COUNT>
+void benchmark(const std::string& script, std::function<float(float)> native, float arg)
+{
+  nanoexpr::lex::Lexer lexer;
+  auto lexerResult = lexer.parse(script);
+  auto parser = nanoexpr::parser::Parser(lexerResult.tokens);
+  auto ast = parser.parse();
+  
+  vm::Functions* functions = new vm::Functions();
+  vm::Enums* enums = new vm::Enums();
+
+  vm::Environment env(functions, enums);
+  env.set("a", arg);
+
+  auto result = ast->compile(&env);
+
+  float results[2];
+  std::chrono::steady_clock::duration elapsed[2];
+
+  if (result)
+  {
+    {
+      auto start = std::chrono::steady_clock::now();
+      for (size_t i = 0; i < COUNT; ++i)
+      {
+        results[0] = result.lambda().as<real_t>();
+      }
+      auto end = std::chrono::steady_clock::now();
+
+      elapsed[0] = end - start;
+    }
+
+    {
+      auto start = std::chrono::steady_clock::now();
+      for (size_t i = 0; i < COUNT; ++i)
+      {
+        results[1] = native(arg);
+      }
+      auto end = std::chrono::steady_clock::now();
+
+      elapsed[1] = end - start;
+    }
+  }
+
+  std::cout << "native took " << std::chrono::duration<float, std::milli>(elapsed[1]).count() << "ms" << std::endl;
+  std::cout << "interptreted took " << std::chrono::duration<float, std::milli>(elapsed[0]).count() << "ms" << std::endl;
+  std::cout << results[0] << " ~= " << results[1];
 }
