@@ -330,6 +330,7 @@ namespace nanoexpr
 
   namespace vm
   {
+    using nullary_operation = std::function<Value()>;
     using unary_operation = std::function<Value(Value)>;
     using binary_operation = std::function<Value(Value, Value)>;
     using lambda_t = std::function<Value()>;
@@ -354,10 +355,12 @@ namespace nanoexpr
 
       union
       {
+        nullary_operation nullary;
         unary_operation unary;
         binary_operation binary;
       };
 
+      VariantFunctor(nullary_operation nullary) : args(1), nullary(nullary) { }
       VariantFunctor(unary_operation unary) : args(1), unary(unary) { }
       VariantFunctor(binary_operation binary) : args(2), binary(binary) { }
       VariantFunctor(const VariantFunctor& o) { this->operator=(o); }
@@ -367,6 +370,7 @@ namespace nanoexpr
         this->args = o.args;
 
         switch (args) {
+          case 0: new (&nullary) nullary_operation(); this->nullary = o.nullary; break;
           case 1: new (&unary) unary_operation(); this->unary = o.unary; break;
           case 2: new (&binary) binary_operation(); this->binary = o.binary; break;
         }
@@ -377,6 +381,7 @@ namespace nanoexpr
       ~VariantFunctor()
       {
         switch (args) {
+          case 0: nullary.~nullary_operation(); break;
           case 1: unary.~unary_operation(); break;
           case 2: binary.~binary_operation(); break;
         }
@@ -398,14 +403,19 @@ namespace nanoexpr
         registerBinary(opcode, Signature(Cmp ? ValueType::BOOL : ValueType::REAL, ValueType::REAL, ValueType::REAL), [](Value v1, Value v2) { return Value(F<real_t>()(v1.r(), v2.r())); });
       }
 
+      template<typename T, typename R, R(*func)(T)> void registerFreeUnaryFunction(const vm::opcode_t& opcode, ValueType returnType, ValueType arg1)
+      {
+        registerUnary(opcode, Signature(returnType, arg1), [](Value v) { return Value(func(v.as<T>())); });
+      }
+
     public:
-      std::pair<ValueType, const VariantFunctor*> find(const opcode_t& opcode, ValueType t1, ValueType t2 = ValueType::NONE) const
+      std::pair<ValueType, const VariantFunctor*> find(const opcode_t& opcode, ValueType t1, ValueType t2 = ValueType::NONE, ValueType t3 = ValueType::NONE) const
       {
         const auto& functorsByOpcode = functors.find(opcode);
 
         if (functorsByOpcode != functors.end())
         {
-          Signature actual = Signature(ValueType::NONE, t1, t2);
+          Signature actual = Signature(ValueType::NONE, t1, t2, t3);
           auto it = std::find_if(functorsByOpcode->second.begin(), functorsByOpcode->second.end(), [&actual](const auto& pair) { return pair.first == actual; });
           
           if (it != functorsByOpcode->second.end())
@@ -442,7 +452,16 @@ namespace nanoexpr
         registerBinary("||", Signature(VT::BOOL, VT::BOOL, VT::BOOL), [](V v1, V v2) { return std::logical_or<bool>()(v1.b(), v2.b()); });
         registerBinary("==", Signature(VT::BOOL, VT::BOOL, VT::BOOL), [](V v1, V v2) { return std::equal_to<bool>()(v1.b(), v2.b()); });
         registerBinary("!=", Signature(VT::BOOL, VT::BOOL, VT::BOOL), [](V v1, V v2) { return std::not_equal_to<bool>()(v1.b(), v2.b()); });
-        registerUnary("!", Signature(VT::BOOL, VT::BOOL), [](V v) { return std::logical_not<bool>()(v.b()); });      }
+        registerUnary("!", Signature(VT::BOOL, VT::BOOL), [](V v) { return std::logical_not<bool>()(v.b()); });
+      
+        /* builtins */
+        registerFreeUnaryFunction<real_t, real_t, std::abs>("abs", ValueType::REAL, ValueType::REAL);
+        registerFreeUnaryFunction<integral_t, integral_t, std::abs>("abs", ValueType::INTEGRAL, ValueType::INTEGRAL);
+
+      }
+
+
+        
     };
 
     class Envinronment
@@ -633,7 +652,7 @@ namespace nanoexpr
       std::vector<std::unique_ptr<Expression>> _args;
       
     public:
-      FunctionCall(const vm::opcode_t& identifier, const std::vector<Expression*>& args) : _identifier(identifier), _args(args.size())
+      FunctionCall(const vm::opcode_t& identifier, const std::vector<Expression*>& args) : _identifier(identifier)
       {
         for (Expression* arg : args)
           _args.emplace_back(arg);
@@ -650,10 +669,31 @@ namespace nanoexpr
           return *failed;
         else
         {
-          
+          auto types = std::array<ValueType, 3>({ ValueType::NONE, ValueType::NONE, ValueType::NONE });
+          assert(types.size() >= args.size());
+          for (size_t i = 0; i < args.size(); ++i)
+            types[i] = args[i].type;
+
+          auto entry = env->functions.find(_identifier, types[0], types[1], types[2]);
+          const auto* functor = entry.second;
+
+          if (functor != nullptr)
+          {
+            switch (_args.size())
+            {
+              case 0:
+                return CompileResult(entry.first, [function = functor->nullary]() { return function(); });
+              case 1:
+                return CompileResult(entry.first, [function = functor->unary, first = args[0].lambda]() { return function(first()); });
+              case 2:
+                return CompileResult(entry.first, [function = functor->binary, first = args[0].lambda, second = args[1].lambda]() { return function(first(), second()); });
+                //TODO: ternary
+            }
+          }
+          else
+            return CompileResult("no matching function found for " + _identifier + "( " + CompileResult::nameForType(types[0]));
         }
         
-        return CompileResult("fail");
       }
     };
   }
@@ -722,7 +762,7 @@ namespace nanoexpr
         {
           vm::opcode_t op = previous()->textual();
           ast::Expression* right = (this->*function)();
-          left = new ast::BinaryExpression(op, left, right);
+          left = new ast::FunctionCall(op, { left, right });
         }
 
         return left;
@@ -777,18 +817,27 @@ namespace nanoexpr
         else if (match(TokenType::IDENTIFIER))
         {
           /* it's a function call */
-          if (!finished() && peek().match(TokenType::SYMBOL, ")"))
+          if (!finished() && peek().match(TokenType::SYMBOL, "("))
           {
             std::string identifier = previous()->textual();
             
             advance();
             std::vector<ast::Expression*> arguments;
-            
+            bool done = false;
+
             /* comma separated expressions as arguments */
             
-            /* arguments ended */
-            if (!finished() & peek().match(TokenType::SYMBOL, "("))
-              return new ast::FunctionCall(identifier, arguments);
+            while (!done)
+            {
+              if (finished())
+                done = true; /*TODO: unexpected eof while parsing function arguments */
+              else if (peek().match(TokenType::SYMBOL, ")"))
+                return new ast::FunctionCall(identifier, arguments);
+              else if (peek().match(TokenType::SYMBOL, ",") && !arguments.empty())
+                advance();
+              else
+                arguments.push_back(expression());
+            }
           }
           /* it's a raw identifier*/
           else
@@ -817,16 +866,14 @@ nanoexpr::lex::Lexer::Lexer()
   rules.emplace_back(new BooleanRule());
   rules.emplace_back(new IntegerRule());
   rules.emplace_back(new IdentifierRule());
-  rules.emplace_back(new OperatorRule(
-    TokenType::OPERATOR, false,
+  rules.emplace_back(new OperatorRule(TokenType::OPERATOR, false,
     {
       "+", "-", "*", "/", "%",
       "||", "&&", "!",
       "==", "!=", ">=", "<=", ">", "<"
     }
   ));
-  rules.emplace_back(new OperatorRule(
-    TokenType::SYMBOL, false,
+  rules.emplace_back(new OperatorRule(TokenType::SYMBOL, false,
     {
       "(", ")"
     }
@@ -891,7 +938,7 @@ std::ostream& operator<<(std::ostream& out, const Token& token)
 
 int main()
 {
-  auto input = "!false && !true == !(false || true)";
+  auto input = "5 + 10 - 4";
   bool execute = true;
 
   nanoexpr::lex::Lexer lexer;
