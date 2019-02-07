@@ -5,6 +5,7 @@
 
 #include <cstdint>
 #include <unordered_map>
+#include <unordered_set>
 #include <string>
 #include <string_view>
 #include <regex>
@@ -90,27 +91,6 @@ namespace nanoexpr
     SYMBOL
   };
 
-  enum class Operator
-  {
-    LOGICAL_AND, LOGICAL_OR, LOGICAL_NOT,
-    
-    EQ, NEQ,
-    GEQ, GRE, LEQ, LES,
-
-    AND, OR, XOR, NOT,
-
-    LSHIFT, RSHIFT,
-
-    PLUS, MINUS, 
-    DIVIDE, MULTIPLY, MODULUS, EXP,    
-  };
-
-  enum class Symbol
-  {
-    LPAREN,
-    RPAREN,
-  };
-
   class Token
   {
     TokenType _type;
@@ -119,16 +99,12 @@ namespace nanoexpr
     union
     {
       Value _value;
-      operator_enum_t _token;
     };
 
   public:
     Token(TokenType type) : _type(type) { }
     Token(TokenType type, std::string_view textual) : _type(type), _textual(textual) { }
     template<typename T, typename std::enable_if<!std::is_enum<T>::value>::type* = nullptr> Token(TokenType type, std::string_view textual, T value) : _type(type), _textual(textual), _value(value) { }
-    template<typename T, typename std::enable_if<std::is_enum<T>::value>::type* = nullptr> Token(TokenType type, std::string_view textual, T value) : _type(type), _textual(textual), _token(static_cast<operator_enum_t>(value)) { }
-
-
 
     TokenType type() const { return _type; }
     size_t length() const { return _textual.length(); }
@@ -138,7 +114,7 @@ namespace nanoexpr
 
     bool valid() const { return _type != TokenType::NONE; }
 
-    template<typename T> bool match(TokenType type, T token) const { return _type == type && static_cast<operator_enum_t>(token) == _token; }
+    bool match(TokenType type, const std::string& textual) const { return _type == type && _textual == textual; }
   };
 
   namespace lex
@@ -284,10 +260,9 @@ namespace nanoexpr
       }
     };
 
-    template<typename T>
     class OperatorRule : public Rule
     {
-      using mapping_t = std::unordered_map<std::string, T>;
+      using mapping_t = std::unordered_set<std::string>;
 
     private:
       bool _requireSpacing;
@@ -295,11 +270,9 @@ namespace nanoexpr
       mapping_t _mapping;
 
     public:
-      OperatorRule(TokenType type, bool requireSpacing, const std::initializer_list<std::pair<T, std::string>>& mapping) : _type(type), _requireSpacing(requireSpacing)
+      OperatorRule(TokenType type, bool requireSpacing, const std::initializer_list<std::string>& mapping) : _type(type), _requireSpacing(requireSpacing), _mapping(mapping)
       {
-        std::transform(mapping.begin(), mapping.end(), std::inserter(_mapping, _mapping.end()), 
-                       [](const auto& pair) { return std::make_pair(pair.second, pair.first); 
-        });
+
       }
 
       Token matches(const std::string_view input) const override
@@ -313,17 +286,17 @@ namespace nanoexpr
             auto it = _mapping.find(token);
 
             if (it != _mapping.end())
-              return Token(_type, token, it->second);
+              return Token(_type, *it);
           }
         }
         else
         {
           for (const typename mapping_t::value_type& entry : _mapping)
           {
-            if (input.length() >= entry.first.length())
+            if (input.length() >= entry.length())
             {
-              if (input.substr(0, entry.first.length()) == entry.first)
-                return Token(_type, entry.first, entry.second);
+              if (input.substr(0, entry.length()) == entry)
+                return Token(_type, entry);
             }
           }
         }
@@ -357,6 +330,7 @@ namespace nanoexpr
 
   namespace vm
   {
+    using nullary_operation = std::function<Value()>;
     using unary_operation = std::function<Value(Value)>;
     using binary_operation = std::function<Value(Value, Value)>;
     using lambda_t = std::function<Value()>;
@@ -373,7 +347,7 @@ namespace nanoexpr
       bool operator==(const Signature& other) const { return types == other.types; }
     };
 
-    using Opcode = uint64_t;
+    using opcode_t = std::string;
 
     struct VariantFunctor
     {
@@ -381,10 +355,12 @@ namespace nanoexpr
 
       union
       {
+        nullary_operation nullary;
         unary_operation unary;
         binary_operation binary;
       };
 
+      VariantFunctor(nullary_operation nullary) : args(1), nullary(nullary) { }
       VariantFunctor(unary_operation unary) : args(1), unary(unary) { }
       VariantFunctor(binary_operation binary) : args(2), binary(binary) { }
       VariantFunctor(const VariantFunctor& o) { this->operator=(o); }
@@ -394,6 +370,7 @@ namespace nanoexpr
         this->args = o.args;
 
         switch (args) {
+          case 0: new (&nullary) nullary_operation(); this->nullary = o.nullary; break;
           case 1: new (&unary) unary_operation(); this->unary = o.unary; break;
           case 2: new (&binary) binary_operation(); this->binary = o.binary; break;
         }
@@ -404,6 +381,7 @@ namespace nanoexpr
       ~VariantFunctor()
       {
         switch (args) {
+          case 0: nullary.~nullary_operation(); break;
           case 1: unary.~unary_operation(); break;
           case 2: binary.~binary_operation(); break;
         }
@@ -413,26 +391,31 @@ namespace nanoexpr
     class Functions
     {
     public:
-      std::unordered_map<Opcode, std::vector<std::pair<Signature, VariantFunctor>>> functors;
+      std::unordered_map<opcode_t, std::vector<std::pair<Signature, VariantFunctor>>> functors;
 
-      template<typename T> void registerBinary(T opcode, Signature signature, binary_operation functor) { functors[static_cast<Opcode>(opcode)].push_back(std::make_pair(signature, functor)); }
-      template<typename T> void registerUnary(T opcode, Signature signature, unary_operation functor) { functors[static_cast<Opcode>(opcode)].push_back(std::make_pair(signature, functor)); }
+      void registerBinary(const opcode_t& opcode, Signature signature, binary_operation functor) { functors[opcode].push_back(std::make_pair(signature, functor)); }
+      void registerUnary(const opcode_t& opcode, Signature signature, unary_operation functor) { functors[opcode].push_back(std::make_pair(signature, functor)); }
 
 
-      template<typename T, bool Cmp, template<typename TT> typename F> void registerNumericBinary(T opcode)
+      template<bool Cmp, template<typename TT> typename F> void registerNumericBinary(const vm::opcode_t& opcode)
       {
         registerBinary(opcode, Signature(Cmp ? ValueType::BOOL : ValueType::INTEGRAL, ValueType::INTEGRAL, ValueType::INTEGRAL), [](Value v1, Value v2) { return Value(F<integral_t>()(v1.i(), v2.i())); });
         registerBinary(opcode, Signature(Cmp ? ValueType::BOOL : ValueType::REAL, ValueType::REAL, ValueType::REAL), [](Value v1, Value v2) { return Value(F<real_t>()(v1.r(), v2.r())); });
       }
 
-    public:
-      template<typename T> std::pair<ValueType, const VariantFunctor*> find(T opcode, ValueType t1, ValueType t2 = ValueType::NONE) const
+      template<typename T, typename R, R(*func)(T)> void registerFreeUnaryFunction(const vm::opcode_t& opcode, ValueType returnType, ValueType arg1)
       {
-        const auto& functorsByOpcode = functors.find(static_cast<Opcode>(opcode));
+        registerUnary(opcode, Signature(returnType, arg1), [](Value v) { return Value(func(v.as<T>())); });
+      }
+
+    public:
+      std::pair<ValueType, const VariantFunctor*> find(const opcode_t& opcode, ValueType t1, ValueType t2 = ValueType::NONE, ValueType t3 = ValueType::NONE) const
+      {
+        const auto& functorsByOpcode = functors.find(opcode);
 
         if (functorsByOpcode != functors.end())
         {
-          Signature actual = Signature(ValueType::NONE, t1, t2);
+          Signature actual = Signature(ValueType::NONE, t1, t2, t3);
           auto it = std::find_if(functorsByOpcode->second.begin(), functorsByOpcode->second.end(), [&actual](const auto& pair) { return pair.first == actual; });
           
           if (it != functorsByOpcode->second.end())
@@ -449,27 +432,36 @@ namespace nanoexpr
         using VT = ValueType;
         
         /* numerical */
-        registerNumericBinary<Operator, false, std::plus>(Operator::PLUS);
-        registerNumericBinary<Operator, false, std::minus>(Operator::MINUS);
-        registerNumericBinary<Operator, false, std::multiplies>(Operator::MULTIPLY);
-        registerNumericBinary<Operator, false, std::divides>(Operator::DIVIDE);
+        registerNumericBinary<false, std::plus>("+");
+        registerNumericBinary<false, std::minus>("-");
+        registerNumericBinary<false, std::multiplies>("*");
+        registerNumericBinary<false, std::divides>("/");
 
         /* equality */
-        registerNumericBinary<Operator, true, std::equal_to>(Operator::EQ);
-        registerNumericBinary<Operator, true, std::not_equal_to>(Operator::NEQ);
+        registerNumericBinary<true, std::equal_to>("==");
+        registerNumericBinary<true, std::not_equal_to>("!=");
 
         /* comparison */
-        registerNumericBinary<Operator, true, std::less>(Operator::LES);
-        registerNumericBinary<Operator, true, std::less_equal>(Operator::LEQ);
-        registerNumericBinary<Operator, true, std::greater>(Operator::GRE);
-        registerNumericBinary<Operator, true, std::greater_equal>(Operator::LEQ);
+        registerNumericBinary<true, std::less>("<");
+        registerNumericBinary<true, std::less_equal>("<=");
+        registerNumericBinary<true, std::greater>(">");
+        registerNumericBinary<true, std::greater_equal>("<=");
 
         /* logical operators */
-        registerBinary(Operator::LOGICAL_AND, Signature(VT::BOOL, VT::BOOL, VT::BOOL), [](V v1, V v2) { return std::logical_and<bool>()(v1.b(), v2.b()); });
-        registerBinary(Operator::LOGICAL_OR, Signature(VT::BOOL, VT::BOOL, VT::BOOL), [](V v1, V v2) { return std::logical_or<bool>()(v1.b(), v2.b()); });
-        registerBinary(Operator::EQ, Signature(VT::BOOL, VT::BOOL, VT::BOOL), [](V v1, V v2) { return std::equal_to<bool>()(v1.b(), v2.b()); });
-        registerBinary(Operator::NEQ, Signature(VT::BOOL, VT::BOOL, VT::BOOL), [](V v1, V v2) { return std::not_equal_to<bool>()(v1.b(), v2.b()); });
-        registerUnary(Operator::LOGICAL_NOT, Signature(VT::BOOL, VT::BOOL), [](V v) { return std::logical_not<bool>()(v.b()); });      }
+        registerBinary("&&", Signature(VT::BOOL, VT::BOOL, VT::BOOL), [](V v1, V v2) { return std::logical_and<bool>()(v1.b(), v2.b()); });
+        registerBinary("||", Signature(VT::BOOL, VT::BOOL, VT::BOOL), [](V v1, V v2) { return std::logical_or<bool>()(v1.b(), v2.b()); });
+        registerBinary("==", Signature(VT::BOOL, VT::BOOL, VT::BOOL), [](V v1, V v2) { return std::equal_to<bool>()(v1.b(), v2.b()); });
+        registerBinary("!=", Signature(VT::BOOL, VT::BOOL, VT::BOOL), [](V v1, V v2) { return std::not_equal_to<bool>()(v1.b(), v2.b()); });
+        registerUnary("!", Signature(VT::BOOL, VT::BOOL), [](V v) { return std::logical_not<bool>()(v.b()); });
+      
+        /* builtins */
+        registerFreeUnaryFunction<real_t, real_t, std::abs>("abs", ValueType::REAL, ValueType::REAL);
+        registerFreeUnaryFunction<integral_t, integral_t, std::abs>("abs", ValueType::INTEGRAL, ValueType::INTEGRAL);
+
+      }
+
+
+        
     };
 
     class Envinronment
@@ -556,11 +548,11 @@ namespace nanoexpr
     class UnaryExpression : public Expression
     {
     private:
-      Operator _op;
+      vm::opcode_t _op;
       std::unique_ptr<Expression> _expr;
 
     public:
-      UnaryExpression(Operator op, Expression* expr) : _op(op), _expr(expr) { }
+      UnaryExpression(vm::opcode_t op, Expression* expr) : _op(op), _expr(expr) { }
 
       CompileResult compile(const vm::Envinronment* env) const override
       {
@@ -595,7 +587,7 @@ namespace nanoexpr
           }
 
           /* no function matching the signature, failure */
-          return CompileResult("no matching function found for " + std::to_string((int)_op) + " " + CompileResult::nameForType(type)); //TODO finish message
+          return CompileResult("no matching function found for " + _op + " " + CompileResult::nameForType(type)); //TODO finish message
         }
       }
     };
@@ -603,11 +595,11 @@ namespace nanoexpr
     class BinaryExpression : public Expression
     {
     private:
-      Operator _op;
+      vm::opcode_t _op;
       std::unique_ptr<Expression> _left, _right;
 
     public:
-      BinaryExpression(Operator op, Expression* left, Expression* right) : _op(op), _left(left), _right(right) { }
+      BinaryExpression(vm::opcode_t op, Expression* left, Expression* right) : _op(op), _left(left), _right(right) { }
 
       CompileResult compile(const vm::Envinronment* env) const override
       {
@@ -648,7 +640,7 @@ namespace nanoexpr
           }
 
           /* no function matching the signature, failure */
-          return CompileResult("no matching function found for " + std::to_string((int)_op) + " " + CompileResult::nameForType(left.type) + ", " + CompileResult::nameForType(right.type)); //TODO finish message
+          return CompileResult(std::string("no matching function found for ") + CompileResult::nameForType(left.type) + " " + _op + " " + CompileResult::nameForType(right.type)); //TODO finish message
         }
       }
     };
@@ -656,11 +648,11 @@ namespace nanoexpr
     class FunctionCall : public Expression
     {
     private:
-      std::string _identifier;
+      vm::opcode_t _identifier;
       std::vector<std::unique_ptr<Expression>> _args;
       
     public:
-      FunctionCall(const std::string& identifier, const std::vector<Expression*>& args) : _identifier(identifier), _args(args.size())
+      FunctionCall(const vm::opcode_t& identifier, const std::vector<Expression*>& args) : _identifier(identifier)
       {
         for (Expression* arg : args)
           _args.emplace_back(arg);
@@ -677,16 +669,39 @@ namespace nanoexpr
           return *failed;
         else
         {
-          
+          auto types = std::array<ValueType, 3>({ ValueType::NONE, ValueType::NONE, ValueType::NONE });
+          assert(types.size() >= args.size());
+          for (size_t i = 0; i < args.size(); ++i)
+            types[i] = args[i].type;
+
+          auto entry = env->functions.find(_identifier, types[0], types[1], types[2]);
+          const auto* functor = entry.second;
+
+          if (functor != nullptr)
+          {
+            switch (_args.size())
+            {
+              case 0:
+                return CompileResult(entry.first, [function = functor->nullary]() { return function(); });
+              case 1:
+                return CompileResult(entry.first, [function = functor->unary, first = args[0].lambda]() { return function(first()); });
+              case 2:
+                return CompileResult(entry.first, [function = functor->binary, first = args[0].lambda, second = args[1].lambda]() { return function(first(), second()); });
+                //TODO: ternary
+            }
+          }
+          else
+            return CompileResult("no matching function found for " + _identifier + "( " + CompileResult::nameForType(types[0]));
         }
         
-        return CompileResult("fail");
       }
     };
   }
  
   namespace parser
   {
+    using token_value_t = std::string;
+    
     class Parser
     {
     protected:
@@ -706,12 +721,11 @@ namespace nanoexpr
         return matched;
       }
 
-      template<typename T, typename std::enable_if<std::is_enum<T>::value && !std::is_same<T, TokenType>::value, T>::type* = nullptr> 
-      bool match(TokenType type, const std::initializer_list<T>& tokens)
+      bool match(TokenType type, const std::initializer_list<token_value_t> & tokens)
       {
         if (check(type))
         {
-          T value = token->token<T>();
+          const token_value_t& value = token->textual();
           bool matched = std::find(tokens.begin(), tokens.end(), value) != tokens.end();
 
           if (matched)
@@ -728,14 +742,7 @@ namespace nanoexpr
         return std::prev(token);
       }
 
-      template<typename T, typename std::enable_if<std::is_enum<T>::value && !std::is_same<T, TokenType>::value, T>::type* = nullptr> 
-      T previous()
-      {
-        return std::prev(token)->token<T>();
-      }
-
-      template<typename T, typename std::enable_if<std::is_enum<T>::value && !std::is_same<T, TokenType>::value, T>::type* = nullptr> 
-      bool consume(TokenType type, const std::initializer_list<T>& tokens, std::string error)
+      bool consume(TokenType type, const std::initializer_list<token_value_t>& tokens, std::string error)
       {
         if (!match(type, tokens))
           return false;
@@ -747,15 +754,15 @@ namespace nanoexpr
 
     protected:
       template<ast::Expression* (Parser::*function)()>
-      ast::Expression* binary(TokenType type, const std::initializer_list<Operator>& tokens)
+      ast::Expression* binary(TokenType type, const std::initializer_list<token_value_t>& tokens)
       {
         ast::Expression* left = (this->*function)();
 
         while (match(type, tokens))
         {
-          Operator op = previous<Operator>();
+          vm::opcode_t op = previous()->textual();
           ast::Expression* right = (this->*function)();
-          left = new ast::BinaryExpression(op, left, right);
+          left = new ast::FunctionCall(op, { left, right });
         }
 
         return left;
@@ -765,26 +772,26 @@ namespace nanoexpr
       ast::Expression* expression() { return condition(); }
 
       /* condition = equality ( [&& ||] condition )* */
-      ast::Expression* condition() { return binary<&Parser::equality>(TokenType::OPERATOR, { Operator::LOGICAL_AND, Operator::LOGICAL_OR }); }
+      ast::Expression* condition() { return binary<&Parser::equality>(TokenType::OPERATOR, { "&&", "||" }); }
 
       /* equality = comparison ( [ == != ] comparison ) */
-      ast::Expression* equality() { return binary<&Parser::comparison>(TokenType::OPERATOR, { Operator::EQ, Operator::NEQ }); }
+      ast::Expression* equality() { return binary<&Parser::comparison>(TokenType::OPERATOR, { "==", "!=" }); }
 
       /* comparison = addition ( [ >= <= > < ] addition ) */
-      ast::Expression* comparison() { return binary<&Parser::addition>(TokenType::OPERATOR, { Operator::GEQ, Operator::GRE, Operator::LEQ, Operator::LES }); }
+      ast::Expression* comparison() { return binary<&Parser::addition>(TokenType::OPERATOR, { ">=", "<=", ">", "<" }); }
 
       /* addition = multiplication ( [+ -] multiplication )* */
-      ast::Expression* addition() { return binary<&Parser::multiplication>(TokenType::OPERATOR, { Operator::PLUS, Operator::MINUS }); }
+      ast::Expression* addition() { return binary<&Parser::multiplication>(TokenType::OPERATOR, { "+", "-" }); }
 
       /* multiplication = unary ( [* / %] unary )* */
-      ast::Expression* multiplication() { return binary<&Parser::unary>(TokenType::OPERATOR, { Operator::MULTIPLY, Operator::DIVIDE, Operator::MODULUS }); }
+      ast::Expression* multiplication() { return binary<&Parser::unary>(TokenType::OPERATOR, { "*", "/", "%" }); }
 
       /* unary = ( [~ !] primary )*/
       ast::Expression* unary()
       { 
-        if (match(TokenType::OPERATOR, { Operator::LOGICAL_NOT }))
+        if (match(TokenType::OPERATOR, { "!" }))
         {
-          Operator op = previous<Operator>();
+          const token_value_t& op = previous()->textual();
           ast::Expression* expr = primary();
           return new ast::UnaryExpression(op, expr);
         }
@@ -801,27 +808,36 @@ namespace nanoexpr
           return new ast::LiteralValue(ValueType::INTEGRAL, previous()->value());
         else if (match(TokenType::FLOAT_LITERAL))
           return new ast::LiteralValue(ValueType::REAL, previous()->value());
-        else if (match(TokenType::SYMBOL, { Symbol::LPAREN }))
+        else if (match(TokenType::SYMBOL, { "(" }))
         {
           ast::Expression* expr = expression();
-          consume(TokenType::SYMBOL, { Symbol::RPAREN }, "expecting ')' after expression");
+          consume(TokenType::SYMBOL, { ")" }, "expecting ')' after expression");
           return expr;
         }
         else if (match(TokenType::IDENTIFIER))
         {
           /* it's a function call */
-          if (!finished() && peek().match(TokenType::SYMBOL, Symbol::LPAREN))
+          if (!finished() && peek().match(TokenType::SYMBOL, "("))
           {
             std::string identifier = previous()->textual();
             
             advance();
             std::vector<ast::Expression*> arguments;
-            
+            bool done = false;
+
             /* comma separated expressions as arguments */
             
-            /* arguments ended */
-            if (!finished() & peek().match(TokenType::SYMBOL, Symbol::RPAREN))
-              return new ast::FunctionCall(identifier, arguments);
+            while (!done)
+            {
+              if (finished())
+                done = true; /*TODO: unexpected eof while parsing function arguments */
+              else if (peek().match(TokenType::SYMBOL, ")"))
+                return new ast::FunctionCall(identifier, arguments);
+              else if (peek().match(TokenType::SYMBOL, ",") && !arguments.empty())
+                advance();
+              else
+                arguments.push_back(expression());
+            }
           }
           /* it's a raw identifier*/
           else
@@ -850,20 +866,18 @@ nanoexpr::lex::Lexer::Lexer()
   rules.emplace_back(new BooleanRule());
   rules.emplace_back(new IntegerRule());
   rules.emplace_back(new IdentifierRule());
-  rules.emplace_back(new OperatorRule<Operator>(
-    TokenType::OPERATOR, false,
-    { 
-      { Operator::PLUS, "+" }, { Operator::MINUS, "-" },
-      { Operator::MULTIPLY, "*" }, { Operator::DIVIDE, "/"}, { Operator::MODULUS, "%" },
-      { Operator::LOGICAL_OR, "||"}, { Operator::LOGICAL_AND, "&&" }, { Operator::LOGICAL_NOT, "!" },
-      { Operator::EQ, "==" }, { Operator::NEQ, "!=" },
-      { Operator::GEQ, ">="}, { Operator::LEQ, "<=" }, { Operator::GRE, ">" }, {Operator::LES, "<" } 
-    }));
-  rules.emplace_back(new OperatorRule<Symbol>(
-    TokenType::SYMBOL, false,
+  rules.emplace_back(new OperatorRule(TokenType::OPERATOR, false,
     {
-      { Symbol::LPAREN, "(" },{ Symbol::RPAREN, ")" },
-    }));
+      "+", "-", "*", "/", "%",
+      "||", "&&", "!",
+      "==", "!=", ">=", "<=", ">", "<"
+    }
+  ));
+  rules.emplace_back(new OperatorRule(TokenType::SYMBOL, false,
+    {
+      "(", ")"
+    }
+  ));
 }
 
 nanoexpr::lex::LexerResult nanoexpr::lex::Lexer::parse(const std::string& text)
@@ -924,7 +938,7 @@ std::ostream& operator<<(std::ostream& out, const Token& token)
 
 int main()
 {
-  auto input = "!false && !true == !(false || true)";
+  auto input = "5 + 10 - 4";
   bool execute = true;
 
   nanoexpr::lex::Lexer lexer;
