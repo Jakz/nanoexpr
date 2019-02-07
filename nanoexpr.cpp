@@ -112,7 +112,7 @@ namespace nanoexpr
       size_t length() const { return _textual.length(); }
       const Value& value() const { return _value; }
       const auto& textual() const { return _textual; }
-      const auto& string() const { return _textual.substr(1, _textual.length() - 2); }
+      std::string string() const { return _textual.substr(1, _textual.length() - 2); }
 
       bool valid() const { return _type != TokenType::NONE; }
 
@@ -137,7 +137,7 @@ namespace nanoexpr
 
       bool hasSpaceOrNonDigitTermination(std::string_view input, size_t position) const
       {
-        return input.length() == position || std::isspace(input[position]) || !std::isdigit(input[position]);
+        return input.length() == position || !std::isdigit(input[position]);
       }
 
       bool hasSpaceOrDigitTermination(std::string_view input, size_t position) const
@@ -241,6 +241,8 @@ namespace nanoexpr
               ++p;
           }
         }
+        
+        return TokenType::NONE;
       }
     };
 
@@ -267,6 +269,7 @@ namespace nanoexpr
           {
             if (std::isdigit(c));
             else if (c == '.') { ++s; }
+            else { failed = true; finished = true; }
           }
           else if (s == 2)
           {
@@ -295,21 +298,19 @@ namespace nanoexpr
     public:
       Token matches(const std::string_view input) const override
       {
-        bool isNegative = false;
+        bool hasSign = false;
         size_t p = 0;
 
-        if (input[p] == '-')
+        if (input[p] == '-' /*|| input[p] == '+'*/)
         {
-          isNegative = true;
+          hasSign = true;
           ++p;
         }
-        else if (input[p] == '+')
-          ++p;
-
+        
         while (p < input.length() && std::isdigit(input[p]))
           ++p;
 
-        if (p > 0 && (!isNegative || p > 1) && Rule::hasSpaceOrNonDigitTermination(input, p))
+        if (p > 0 && (!hasSign || p > 1) && Rule::hasSpaceOrNonDigitTermination(input, p))
         {
           std::string copy = std::string(input.substr(0, p));
           return Token(TokenType::INTEGRAL_LITERAL, input.substr(0, p), std::stoi(copy)); //TODO: stoi, choose according to integer_t type?
@@ -611,7 +612,14 @@ namespace nanoexpr
         return CompileResult(_type, [value = _value]() { return value; });
       }
 
-      virtual std::string textual(size_t indent) const override { return std::string(indent, ' ') + "value()\n"; }
+      virtual std::string textual(size_t indent) const override
+      {
+        auto result = std::string(indent, ' ') + "value(";
+        if (_type == ValueType::INTEGRAL) return result + std::to_string(_value.i()) + ")\n";
+        else if (_type == ValueType::REAL) return result + std::to_string(_value.r()) + ")\n";
+        else if (_type == ValueType::BOOL) return result + (_value.b() ? "true)\n" : "false)\n");
+        else assert(false);
+      }
     };
 
     class Identifier : public Expression
@@ -1036,9 +1044,8 @@ int main()
 {
   benchmark<10000>("(1.0/(a+1)+2/(a+2)+3/(a+3))", [](float a) { return 1.0f / (a + 1) + 2 / (a + 2) + 3 / (a + 3); }, 2.21f);
   getchar();
-
-  
   return 0;
+  
   auto input = "(1.0/(a+1)+2/(a+2)+3/(a+3))";
   bool execute = true;
 
@@ -1075,8 +1082,7 @@ int main()
       Value v = result.lambda();
 
       FooEnum ev = v.as<FooEnum>();
-
-
+      
       std::cout << std::endl << input << " -> ";
 
       switch (result.type)
@@ -1106,6 +1112,10 @@ void benchmark(const std::string& script, std::function<float(float)> native, fl
   auto lexerResult = lexer.parse(script);
   auto parser = nanoexpr::parser::Parser(lexerResult.tokens);
   auto ast = parser.parse();
+  
+  for (const auto& token : lexerResult.tokens)
+    std::cout << token << std::endl;
+  std::cout << std::endl << ast->textual() << std::endl;
   
   vm::Functions* functions = new vm::Functions();
   vm::Enums* enums = new vm::Enums();
