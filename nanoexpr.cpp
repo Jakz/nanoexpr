@@ -16,11 +16,9 @@
 #include <cctype>
 
 namespace nanoexpr
-{  
+{   
   using real_t = float;
   using integral_t = int32_t;
-  
-  using operator_enum_t = uint64_t;
 
   enum class ValueType
   {
@@ -396,7 +394,6 @@ namespace nanoexpr
       void registerBinary(const opcode_t& opcode, Signature signature, binary_operation functor) { functors[opcode].push_back(std::make_pair(signature, functor)); }
       void registerUnary(const opcode_t& opcode, Signature signature, unary_operation functor) { functors[opcode].push_back(std::make_pair(signature, functor)); }
 
-
       template<bool Cmp, template<typename TT> typename F> void registerNumericBinary(const vm::opcode_t& opcode)
       {
         registerBinary(opcode, Signature(Cmp ? ValueType::BOOL : ValueType::INTEGRAL, ValueType::INTEGRAL, ValueType::INTEGRAL), [](Value v1, Value v2) { return Value(F<integral_t>()(v1.i(), v2.i())); });
@@ -506,6 +503,7 @@ namespace nanoexpr
     { 
     public:
       virtual CompileResult compile(const vm::Envinronment* env) const = 0;
+      virtual std::string textual(size_t indent = 0) const = 0;
     };
 
     class Expression : public Node
@@ -522,11 +520,12 @@ namespace nanoexpr
     public:
       template<typename T> LiteralValue(ValueType type, T value) : _type(type), _value(value) { }
 
-      CompileResult compile(const vm::Envinronment*) const override 
-      { 
+      CompileResult compile(const vm::Envinronment*) const override
+      {
         return CompileResult(_type, [value = _value]() { return value; });
       }
 
+      virtual std::string textual(size_t indent) const override { return std::string(indent, ' ') + "value()\n"; }
     };
 
     class Identifier : public Expression
@@ -543,106 +542,8 @@ namespace nanoexpr
         const TypedValue* value = env->get(_identifier); 
         return CompileResult(value->type, [value = value->value]() { return value; }); 
       }
-    };
 
-    class UnaryExpression : public Expression
-    {
-    private:
-      vm::opcode_t _op;
-      std::unique_ptr<Expression> _expr;
-
-    public:
-      UnaryExpression(vm::opcode_t op, Expression* expr) : _op(op), _expr(expr) { }
-
-      CompileResult compile(const vm::Envinronment* env) const override
-      {
-        auto expr = _expr->compile(env);
-
-        if (!expr) return expr;
-        else
-        {
-          auto type = expr.type;
-          bool retry = true;
-
-          while (retry)
-          {
-            auto entry = env->functions.find(_op, type);
-            const auto* functor = entry.second;
-
-            if (functor)
-            {
-              assert(functor->args == 1);
-              return CompileResult(entry.first, [function = functor->unary, lambda = expr.lambda]() { return function(lambda()); });
-            }
-
-            /* try with promotion to other integral type */
-            //TODO: maybe one way only int -> real
-            retry = false;
-            if (type == ValueType::INTEGRAL)
-            {
-              type = ValueType::REAL;
-              expr.lambda = [old = expr.lambda]() { Value v = old(); return Value((real_t)v.i()); };
-              retry = true;
-            }
-          }
-
-          /* no function matching the signature, failure */
-          return CompileResult("no matching function found for " + _op + " " + CompileResult::nameForType(type)); //TODO finish message
-        }
-      }
-    };
-
-    class BinaryExpression : public Expression
-    {
-    private:
-      vm::opcode_t _op;
-      std::unique_ptr<Expression> _left, _right;
-
-    public:
-      BinaryExpression(vm::opcode_t op, Expression* left, Expression* right) : _op(op), _left(left), _right(right) { }
-
-      CompileResult compile(const vm::Envinronment* env) const override
-      {
-        auto left = _left->compile(env), right = _right->compile(env);
-
-        if (!left) return left;
-        else if (!right) return right;
-        else
-        {
-          auto leftType = left.type, rightType = right.type;
-          bool retry = true;
-
-          while (retry)
-          {
-            auto entry = env->functions.find(_op, leftType, rightType);
-            const auto* functor = entry.second;
-
-            if (functor)
-            {
-              assert(functor->args == 2);
-              return CompileResult(entry.first, [function = functor->binary, left = left.lambda, right = right.lambda]() { return function(left(), right()); });
-            }
-
-            /* try with promotion to float if available */
-            retry = false;
-            if (leftType == ValueType::INTEGRAL)
-            {
-              leftType = ValueType::REAL;
-              left.lambda = [old = left.lambda] () { Value v = old(); return Value((real_t)v.i()); };
-              retry = true;
-            }
-            if (rightType == ValueType::INTEGRAL)
-            {
-              rightType = ValueType::REAL; 
-              right.lambda = [old = right.lambda]() { Value v = old(); return Value((real_t)v.i()); };
-              retry = true; 
-            }
-          }
-
-          /* no function matching the signature, failure */
-          return CompileResult(std::string("no matching function found for ") + CompileResult::nameForType(left.type) + " " + _op + " " + CompileResult::nameForType(right.type)); //TODO finish message
-        }
-      }
+      std::string textual(size_t indent = 0) const override { return std::string(indent, ' ') + "identifier(" + _identifier + ")\n"; }
     };
     
     class FunctionCall : public Expression
@@ -671,30 +572,63 @@ namespace nanoexpr
         {
           auto types = std::array<ValueType, 3>({ ValueType::NONE, ValueType::NONE, ValueType::NONE });
           assert(types.size() >= args.size());
+
           for (size_t i = 0; i < args.size(); ++i)
             types[i] = args[i].type;
 
-          auto entry = env->functions.find(_identifier, types[0], types[1], types[2]);
-          const auto* functor = entry.second;
+          bool retry = true;
 
-          if (functor != nullptr)
+          while (retry)
           {
-            switch (_args.size())
+            
+            auto entry = env->functions.find(_identifier, types[0], types[1], types[2]);
+            const auto* functor = entry.second;
+
+            if (functor != nullptr)
             {
-              case 0:
-                return CompileResult(entry.first, [function = functor->nullary]() { return function(); });
-              case 1:
-                return CompileResult(entry.first, [function = functor->unary, first = args[0].lambda]() { return function(first()); });
-              case 2:
-                return CompileResult(entry.first, [function = functor->binary, first = args[0].lambda, second = args[1].lambda]() { return function(first(), second()); });
-                //TODO: ternary
+              switch (_args.size())
+              {
+                case 0:
+                  return CompileResult(entry.first, [function = functor->nullary]() { return function(); });
+                case 1:
+                  return CompileResult(entry.first, [function = functor->unary, first = args[0].lambda]() { return function(first()); });
+                case 2:
+                  return CompileResult(entry.first, [function = functor->binary, first = args[0].lambda, second = args[1].lambda]() { return function(first(), second()); });
+                  //TODO: ternary
+              }
+            }
+            else
+            {
+              /* try with promotion to float if available */
+
+              retry = false;
+              for (size_t i = 0; i < types.size(); ++i)
+              {
+                if (types[i] == ValueType::INTEGRAL)
+                {
+                  args[i].lambda = [old = args[i].lambda]() { Value v = old();  return Value((real_t)v.i()); };
+                  types[i] = ValueType::REAL;
+                  retry = true;
+                }
+              }
             }
           }
-          else
-            return CompileResult("no matching function found for " + _identifier + "( " + CompileResult::nameForType(types[0]));
+
+          /* no function matching the signature, failure */
+          return CompileResult("no matching function found for " + _identifier + "( " + CompileResult::nameForType(types[0])); //TODO: finish log
+
         }
         
       }
+
+      std::string textual(size_t indent) const override
+      { 
+        std::string result = std::string(indent, ' ') + "call(" + _identifier + ")\n";
+        for (const auto& arg : _args)
+          result += arg->textual(indent + 2);
+        return result;
+      }
+
     };
   }
  
@@ -793,7 +727,7 @@ namespace nanoexpr
         {
           const token_value_t& op = previous()->textual();
           ast::Expression* expr = primary();
-          return new ast::UnaryExpression(op, expr);
+          return new ast::FunctionCall(op, { expr });
         }
 
         return primary();
@@ -831,10 +765,10 @@ namespace nanoexpr
             {
               if (finished())
                 done = true; /*TODO: unexpected eof while parsing function arguments */
-              else if (peek().match(TokenType::SYMBOL, ")"))
+              else if (match(TokenType::SYMBOL, { ")" }))
                 return new ast::FunctionCall(identifier, arguments);
-              else if (peek().match(TokenType::SYMBOL, ",") && !arguments.empty())
-                advance();
+              else if (match(TokenType::SYMBOL, { "," }) && !arguments.empty())
+                ;
               else
                 arguments.push_back(expression());
             }
@@ -938,7 +872,7 @@ std::ostream& operator<<(std::ostream& out, const Token& token)
 
 int main()
 {
-  auto input = "5 + 10 - 4";
+  auto input = "!true";
   bool execute = true;
 
   nanoexpr::lex::Lexer lexer;
@@ -962,6 +896,9 @@ int main()
 
     if (result)
     {
+      std::cout << std::endl << ast->textual();
+      
+      
       Value v = result.lambda();
 
       std::cout << std::endl << input << " -> ";
