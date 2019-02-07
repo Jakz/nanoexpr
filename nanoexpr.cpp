@@ -74,49 +74,48 @@ namespace nanoexpr
     TypedValue(bool real) : value(real), type(ValueType::BOOL) { }
   };
 
-  enum class TokenType
-  {
-    NONE,
-    SKIP,
-
-    IDENTIFIER,
-    /*STRING,*/
-    FLOAT_LITERAL,
-    INTEGRAL_LITERAL,
-    BOOLEAN_LITERAL,
-
-    OPERATOR,
-    SYMBOL
-  };
-
-  class Token
-  {
-    TokenType _type;
-    std::string _textual;
-
-    union
-    {
-      Value _value;
-    };
-
-  public:
-    Token(TokenType type) : _type(type) { }
-    Token(TokenType type, std::string_view textual) : _type(type), _textual(textual) { }
-    template<typename T, typename std::enable_if<!std::is_enum<T>::value>::type* = nullptr> Token(TokenType type, std::string_view textual, T value) : _type(type), _textual(textual), _value(value) { }
-
-    TokenType type() const { return _type; }
-    size_t length() const { return _textual.length(); }
-    const Value& value() const { return _value;  }
-    template<typename T> T token() const { return static_cast<T>(_token);  }
-    const auto& textual() const { return _textual; }
-
-    bool valid() const { return _type != TokenType::NONE; }
-
-    bool match(TokenType type, const std::string& textual) const { return _type == type && _textual == textual; }
-  };
-
   namespace lex
   {
+    enum class TokenType
+    {
+      NONE,
+      SKIP,
+
+      IDENTIFIER,
+      /*STRING,*/
+      FLOAT_LITERAL,
+      INTEGRAL_LITERAL,
+      BOOLEAN_LITERAL,
+
+      OPERATOR,
+      SYMBOL
+    };
+
+    class Token
+    {
+      TokenType _type;
+      std::string _textual;
+
+      union
+      {
+        Value _value;
+      };
+
+    public:
+      Token(TokenType type) : _type(type) { }
+      Token(TokenType type, std::string_view textual) : _type(type), _textual(textual) { }
+      template<typename T, typename std::enable_if<!std::is_enum<T>::value>::type* = nullptr> Token(TokenType type, std::string_view textual, T value) : _type(type), _textual(textual), _value(value) { }
+
+      TokenType type() const { return _type; }
+      size_t length() const { return _textual.length(); }
+      const Value& value() const { return _value; }
+      const auto& textual() const { return _textual; }
+
+      bool valid() const { return _type != TokenType::NONE; }
+
+      bool match(TokenType type, const std::string& textual) const { return _type == type && _textual == textual; }
+    };
+
     class Rule
     {
     protected:
@@ -388,6 +387,9 @@ namespace nanoexpr
 
     class Functions
     {
+    private:
+      void init();
+
     public:
       std::unordered_map<opcode_t, std::vector<std::pair<Signature, VariantFunctor>>> functors;
 
@@ -398,6 +400,12 @@ namespace nanoexpr
       {
         registerBinary(opcode, Signature(Cmp ? ValueType::BOOL : ValueType::INTEGRAL, ValueType::INTEGRAL, ValueType::INTEGRAL), [](Value v1, Value v2) { return Value(F<integral_t>()(v1.i(), v2.i())); });
         registerBinary(opcode, Signature(Cmp ? ValueType::BOOL : ValueType::REAL, ValueType::REAL, ValueType::REAL), [](Value v1, Value v2) { return Value(F<real_t>()(v1.r(), v2.r())); });
+      }
+
+      template<bool Cmp, template<typename TT> typename F> void registerNumericUnary(const vm::opcode_t& opcode)
+      {
+        registerUnary(opcode, Signature(Cmp ? ValueType::BOOL : ValueType::INTEGRAL, ValueType::INTEGRAL), [](Value v) { return Value(F<integral_t>()(v.i())); });
+        registerUnary(opcode, Signature(Cmp ? ValueType::BOOL : ValueType::REAL, ValueType::REAL), [](Value v) { return Value(F<real_t>()(v.r())); });
       }
 
       template<typename T, typename R, R(*func)(T)> void registerFreeUnaryFunction(const vm::opcode_t& opcode, ValueType returnType, ValueType arg1)
@@ -422,54 +430,19 @@ namespace nanoexpr
         return std::make_pair(ValueType::NONE, nullptr);
       }
 
-    public:
-      Functions()
-      {
-        using V = Value;
-        using VT = ValueType;
-        
-        /* numerical */
-        registerNumericBinary<false, std::plus>("+");
-        registerNumericBinary<false, std::minus>("-");
-        registerNumericBinary<false, std::multiplies>("*");
-        registerNumericBinary<false, std::divides>("/");
-
-        /* equality */
-        registerNumericBinary<true, std::equal_to>("==");
-        registerNumericBinary<true, std::not_equal_to>("!=");
-
-        /* comparison */
-        registerNumericBinary<true, std::less>("<");
-        registerNumericBinary<true, std::less_equal>("<=");
-        registerNumericBinary<true, std::greater>(">");
-        registerNumericBinary<true, std::greater_equal>("<=");
-
-        /* logical operators */
-        registerBinary("&&", Signature(VT::BOOL, VT::BOOL, VT::BOOL), [](V v1, V v2) { return std::logical_and<bool>()(v1.b(), v2.b()); });
-        registerBinary("||", Signature(VT::BOOL, VT::BOOL, VT::BOOL), [](V v1, V v2) { return std::logical_or<bool>()(v1.b(), v2.b()); });
-        registerBinary("==", Signature(VT::BOOL, VT::BOOL, VT::BOOL), [](V v1, V v2) { return std::equal_to<bool>()(v1.b(), v2.b()); });
-        registerBinary("!=", Signature(VT::BOOL, VT::BOOL, VT::BOOL), [](V v1, V v2) { return std::not_equal_to<bool>()(v1.b(), v2.b()); });
-        registerUnary("!", Signature(VT::BOOL, VT::BOOL), [](V v) { return std::logical_not<bool>()(v.b()); });
-      
-        /* builtins */
-        registerFreeUnaryFunction<real_t, real_t, std::abs>("abs", ValueType::REAL, ValueType::REAL);
-        registerFreeUnaryFunction<integral_t, integral_t, std::abs>("abs", ValueType::INTEGRAL, ValueType::INTEGRAL);
-
-      }
-
-
-        
+      Functions() { init(); }
     };
 
-    class Envinronment
+    class Environment
     {
     private:
+      const Functions* functions;
       std::unordered_map<std::string, TypedValue> variables;
     public:
-      Functions functions;
+      Environment(const Functions* functions) : functions(functions) { }
 
+      std::pair<ValueType, const VariantFunctor*> findFunction(const opcode_t& opcode, ValueType t1, ValueType t2 = ValueType::NONE, ValueType t3 = ValueType::NONE) const { return functions->find(opcode, t1, t2, t3); }
       void set(const std::string& ident, TypedValue value) { variables.emplace(std::make_pair(ident, value)); }
-
       const TypedValue* get(const std::string& identifier) const { auto it = variables.find(identifier); return it != variables.end() ? &it->second : nullptr; }
     };
   }
@@ -498,17 +471,12 @@ namespace nanoexpr
         }
       }
     };
-    
-    class Node 
-    { 
-    public:
-      virtual CompileResult compile(const vm::Envinronment* env) const = 0;
-      virtual std::string textual(size_t indent = 0) const = 0;
-    };
 
-    class Expression : public Node
+    class Expression
     { 
     public:
+      virtual CompileResult compile(const vm::Environment* env) const = 0;
+      virtual std::string textual(size_t indent = 0) const = 0;
     };
 
     class LiteralValue : public Expression
@@ -520,7 +488,7 @@ namespace nanoexpr
     public:
       template<typename T> LiteralValue(ValueType type, T value) : _type(type), _value(value) { }
 
-      CompileResult compile(const vm::Envinronment*) const override
+      CompileResult compile(const vm::Environment*) const override
       {
         return CompileResult(_type, [value = _value]() { return value; });
       }
@@ -536,10 +504,10 @@ namespace nanoexpr
     public:
       Identifier(const std::string& identifier) : _identifier(identifier) { }
 
-      CompileResult compile(const vm::Envinronment* env) const override
+      CompileResult compile(const vm::Environment* env) const override
       { 
         //TODO: here we assume that identifier is already defined in symbol table, is that correct?
-        const TypedValue* value = env->get(_identifier); 
+        const TypedValue* value = env->get(_identifier);
         return CompileResult(value->type, [value = value->value]() { return value; }); 
       }
 
@@ -559,7 +527,7 @@ namespace nanoexpr
           _args.emplace_back(arg);
       }
       
-      CompileResult compile(const vm::Envinronment* env) const override
+      CompileResult compile(const vm::Environment* env) const override
       {
         std::vector<CompileResult> args;
         std::transform(_args.begin(), _args.end(), std::back_inserter(args), [env] ( const auto& expr) { return expr->compile(env); });
@@ -581,19 +549,16 @@ namespace nanoexpr
           while (retry)
           {
             
-            auto entry = env->functions.find(_identifier, types[0], types[1], types[2]);
+            auto entry = env->findFunction(_identifier, types[0], types[1], types[2]);
             const auto* functor = entry.second;
 
             if (functor != nullptr)
             {
               switch (_args.size())
               {
-                case 0:
-                  return CompileResult(entry.first, [function = functor->nullary]() { return function(); });
-                case 1:
-                  return CompileResult(entry.first, [function = functor->unary, first = args[0].lambda]() { return function(first()); });
-                case 2:
-                  return CompileResult(entry.first, [function = functor->binary, first = args[0].lambda, second = args[1].lambda]() { return function(first(), second()); });
+                case 0: return CompileResult(entry.first, [function = functor->nullary]() { return function(); });
+                case 1: return CompileResult(entry.first, [function = functor->unary, first = args[0].lambda]() { return function(first()); });
+                case 2: return CompileResult(entry.first, [function = functor->binary, first = args[0].lambda, second = args[1].lambda]() { return function(first(), second()); });
                   //TODO: ternary
               }
             }
@@ -615,7 +580,7 @@ namespace nanoexpr
           }
 
           /* no function matching the signature, failure */
-          return CompileResult("no matching function found for " + _identifier + "( " + CompileResult::nameForType(types[0])); //TODO: finish log
+          return CompileResult("no matching function found for " + _identifier + " " + CompileResult::nameForType(types[0])); //TODO: finish log
 
         }
         
@@ -635,6 +600,7 @@ namespace nanoexpr
   namespace parser
   {
     using token_value_t = std::string;
+    using namespace lex;
     
     class Parser
     {
@@ -676,7 +642,7 @@ namespace nanoexpr
         return std::prev(token);
       }
 
-      bool consume(TokenType type, const std::initializer_list<token_value_t>& tokens, std::string error)
+      bool consume(TokenType type, const std::initializer_list<token_value_t>& tokens, const std::string& error)
       {
         if (!match(type, tokens))
           return false;
@@ -720,10 +686,10 @@ namespace nanoexpr
       /* multiplication = unary ( [* / %] unary )* */
       ast::Expression* multiplication() { return binary<&Parser::unary>(TokenType::OPERATOR, { "*", "/", "%" }); }
 
-      /* unary = ( [~ !] primary )*/
+      /* unary = ( [- ~ !] primary )*/
       ast::Expression* unary()
       { 
-        if (match(TokenType::OPERATOR, { "!" }))
+        if (match(TokenType::OPERATOR, { "!", "~", "-" }))
         {
           const token_value_t& op = previous()->textual();
           ast::Expression* expr = primary();
@@ -785,13 +751,52 @@ namespace nanoexpr
       }
 
     public:
-      Parser(const lex::token_list& tokens) : tokens(tokens), token(this->tokens.begin()) { }
-
-      ast::Node* parse() { return expression(); }
+      explicit Parser(const lex::token_list& tokens) : tokens(tokens), token(this->tokens.begin()) { }
+      ast::Expression* parse() { return expression(); }
     };
   }
 
 
+}
+
+void nanoexpr::vm::Functions::init()
+{
+  using V = Value;
+  using VT = ValueType;
+
+  /* numerical */
+  registerNumericBinary<false, std::plus>("+");
+  registerNumericBinary<false, std::minus>("-");
+  registerNumericBinary<false, std::multiplies>("*");
+  registerNumericBinary<false, std::divides>("/");
+  registerBinary("%", vm::Signature(VT::INTEGRAL, VT::INTEGRAL, VT::INTEGRAL), [](V v1, V v2) { return std::modulus<bool>()(v1.i(), v2.i()); });
+  registerNumericUnary<false, std::negate>("-");
+
+  /* bitwise */
+  registerUnary("~", vm::Signature(VT::INTEGRAL, VT::INTEGRAL), [](V v) { return std::bit_not<bool>()(v.i()); });
+  registerBinary("&", vm::Signature(VT::INTEGRAL, VT::INTEGRAL, VT::INTEGRAL), [](V v1, V v2) { return std::bit_and<bool>()(v1.b(), v2.b()); });
+  registerBinary("|", vm::Signature(VT::INTEGRAL, VT::INTEGRAL, VT::INTEGRAL), [](V v1, V v2) { return std::bit_or<bool>()(v1.b(), v2.b()); });
+
+  /* equality */
+  registerNumericBinary<true, std::equal_to>("==");
+  registerNumericBinary<true, std::not_equal_to>("!=");
+
+  /* comparison */
+  registerNumericBinary<true, std::less>("<");
+  registerNumericBinary<true, std::less_equal>("<=");
+  registerNumericBinary<true, std::greater>(">");
+  registerNumericBinary<true, std::greater_equal>("<=");
+
+  /* logical operators */
+  registerBinary("&&", vm::Signature(VT::BOOL, VT::BOOL, VT::BOOL), [](V v1, V v2) { return std::logical_and<bool>()(v1.b(), v2.b()); });
+  registerBinary("||", vm::Signature(VT::BOOL, VT::BOOL, VT::BOOL), [](V v1, V v2) { return std::logical_or<bool>()(v1.b(), v2.b()); });
+  registerBinary("==", vm::Signature(VT::BOOL, VT::BOOL, VT::BOOL), [](V v1, V v2) { return std::equal_to<bool>()(v1.b(), v2.b()); });
+  registerBinary("!=", vm::Signature(VT::BOOL, VT::BOOL, VT::BOOL), [](V v1, V v2) { return std::not_equal_to<bool>()(v1.b(), v2.b()); });
+  registerUnary("!", vm::Signature(VT::BOOL, VT::BOOL), [](V v) { return std::logical_not<bool>()(v.b()); });
+
+  /* builtins */
+  registerFreeUnaryFunction<real_t, real_t, std::abs>("abs", ValueType::REAL, ValueType::REAL);
+  registerFreeUnaryFunction<integral_t, integral_t, std::abs>("abs", ValueType::INTEGRAL, ValueType::INTEGRAL);
 }
 
 nanoexpr::lex::Lexer::Lexer()
@@ -803,15 +808,11 @@ nanoexpr::lex::Lexer::Lexer()
   rules.emplace_back(new OperatorRule(TokenType::OPERATOR, false,
     {
       "+", "-", "*", "/", "%",
-      "||", "&&", "!",
+      "||", "&&", "!", "~",
       "==", "!=", ">=", "<=", ">", "<"
     }
   ));
-  rules.emplace_back(new OperatorRule(TokenType::SYMBOL, false,
-    {
-      "(", ")"
-    }
-  ));
+  rules.emplace_back(new OperatorRule(TokenType::SYMBOL, false, { "(", ")" }));
 }
 
 nanoexpr::lex::LexerResult nanoexpr::lex::Lexer::parse(const std::string& text)
@@ -819,11 +820,10 @@ nanoexpr::lex::LexerResult nanoexpr::lex::Lexer::parse(const std::string& text)
   std::vector<Token> tokens;
 
   size_t p = 0;
-  bool foundAny = false;
 
   while (p < text.length())
   {
-    foundAny = false;
+    bool foundAny = false;
     std::string_view input = std::string_view(text).substr(p);
 
     for (const auto& rule : rules)
@@ -849,22 +849,20 @@ nanoexpr::lex::LexerResult nanoexpr::lex::Lexer::parse(const std::string& text)
     }
   }
 
-
-
   return { tokens, true, "" };
 }
 
 
 using namespace nanoexpr;
-std::ostream& operator<<(std::ostream& out, const Token& token)
+std::ostream& operator<<(std::ostream& out, const lex::Token& token)
 {
   switch (token.type()) {
-    case TokenType::BOOLEAN_LITERAL: out << "bool(" << (token.value().boolean ? "true" : "false") << ")"; break;
-    case TokenType::FLOAT_LITERAL: out << "float(" << token.value().real << ")"; break;
-    case TokenType::INTEGRAL_LITERAL: out << "int(" << token.value().integral << ")"; break;
-    case TokenType::OPERATOR: out << "operator('" << token.textual() << "')"; break;
-    case TokenType::SYMBOL: out << "symbol('" << token.textual() << "')"; break;
-    case TokenType::IDENTIFIER: out << "identifier(" << token.textual() << ")"; break;
+    case lex::TokenType::BOOLEAN_LITERAL: out << "bool(" << (token.value().boolean ? "true" : "false") << ")"; break;
+    case lex::TokenType::FLOAT_LITERAL: out << "float(" << token.value().real << ")"; break;
+    case lex::TokenType::INTEGRAL_LITERAL: out << "int(" << token.value().integral << ")"; break;
+    case lex::TokenType::OPERATOR: out << "operator('" << token.textual() << "')"; break;
+    case lex::TokenType::SYMBOL: out << "symbol('" << token.textual() << "')"; break;
+    case lex::TokenType::IDENTIFIER: out << "identifier(" << token.textual() << ")"; break;
   }
 
   return out;
@@ -872,7 +870,7 @@ std::ostream& operator<<(std::ostream& out, const Token& token)
 
 int main()
 {
-  auto input = "!true";
+  auto input = "~5";
   bool execute = true;
 
   nanoexpr::lex::Lexer lexer;
@@ -888,7 +886,8 @@ int main()
     nanoexpr::parser::Parser parser(result.tokens);
     auto ast =  parser.parse();
 
-    vm::Envinronment env;
+    vm::Functions* functions = new vm::Functions();
+    vm::Environment env(functions);
 
     env.set("x", 4.28f);
 
