@@ -12,8 +12,20 @@
 
 namespace nanoexpr
 {
-  using real_t = float;
-  using integral_t = int32_t;
+  /* configuration */
+  namespace config
+  {
+    using real_t = float;
+    using integral_t = int32_t;
+    static constexpr bool EnableIntegerPromotionToReal = true;
+  }
+
+
+  
+
+
+  using real_t = config::real_t;
+  using integral_t = config::integral_t;
 
   enum class ValueType
   {
@@ -705,15 +717,17 @@ namespace nanoexpr
             else
             {
               /* try with promotion to float if available */
-
-              retry = false;
-              for (size_t i = 0; i < types.size(); ++i)
+              if (config::EnableIntegerPromotionToReal)
               {
-                if (types[i] == ValueType::INTEGRAL)
+                retry = false;
+                for (size_t i = 0; i < types.size(); ++i)
                 {
-                  args[i].lambda = [old = args[i].lambda]() { Value v = old();  return Value((real_t)v.i()); };
-                  types[i] = ValueType::REAL;
-                  retry = true;
+                  if (types[i] == ValueType::INTEGRAL)
+                  {
+                    args[i].lambda = [old = args[i].lambda]() { Value v = old();  return Value((real_t)v.i()); };
+                    types[i] = ValueType::REAL;
+                    retry = true;
+                  }
                 }
               }
             }
