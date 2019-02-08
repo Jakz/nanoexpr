@@ -9,6 +9,7 @@
 #include <array>
 #include <functional>
 #include <cctype>
+#include <cassert>
 
 namespace nanoexpr
 {
@@ -90,7 +91,7 @@ namespace nanoexpr
   {
     enum class TokenType
     {
-      NONE, SKIP,
+      NONE, SKIP, ERROR,
 
       IDENTIFIER,
       STRING, FLOAT, INTEGRAL, BOOLEAN,
@@ -101,15 +102,12 @@ namespace nanoexpr
     {
       TokenType _type;
       std::string _textual;
-
-      union
-      {
-        Value _value;
-      };
+      Value _value;
 
     public:
-      Token(TokenType type) : _type(type) { }
-      Token(TokenType type, std::string_view textual) : _type(type), _textual(textual) { }
+      Token(TokenType type) : _type(type), _value(0) { }
+      Token(TokenType type, std::string_view textual) : _type(type), _textual(textual), _value(0) { }
+      Token(const std::string& message) : _type(TokenType::ERROR), _textual(message), _value(0) { }
       template<typename T, typename std::enable_if<!std::is_enum<T>::value>::type* = nullptr> Token(TokenType type, std::string_view textual, T value) : _type(type), _textual(textual), _value(value) { }
 
       TokenType type() const { return _type; }
@@ -118,7 +116,7 @@ namespace nanoexpr
       const auto& textual() const { return _textual; }
       std::string string() const { return _textual.substr(1, _textual.length() - 2); }
 
-      bool valid() const { return _type != TokenType::NONE; }
+      bool valid() const { return _type != TokenType::NONE && _type != TokenType::ERROR; }
 
       bool match(TokenType type, const std::string& textual) const { return _type == type && _textual == textual; }
     };
@@ -126,6 +124,8 @@ namespace nanoexpr
     class Rule
     {
     protected:
+      bool lookahead(size_t offset, std::string_view input, char expected, bool ignoreCase = true) const { return offset < input.size() && std::tolower(input[offset]) == expected; }
+
       bool matches(std::string_view input, std::string_view expected) const
       {
         const bool longEnough = input.length() >= expected.length();
@@ -266,8 +266,7 @@ namespace nanoexpr
 
           if (s == 0)
           {
-            if (c == '-' || c == '+')
-              ++s;
+            if (c == '-' || c == '+') ++s;
             else if (std::isdigit(c)) { ++s; --p; }
             else { failed = true; finished = true; }
           }
@@ -281,15 +280,16 @@ namespace nanoexpr
           {
             if (Rule::hasSpaceOrNonDigitTermination(input, p))
             {
+              --p;
               finished = true;
-              break;
             }
+            break;
           }
 
           ++p;
         }
 
-        if (!failed)
+        if (!failed && s == 2)
         {
           std::string copy = std::string(input.substr(0, p));
           return Token(TokenType::FLOAT, copy, std::stof(copy));
@@ -301,28 +301,70 @@ namespace nanoexpr
 
     class IntegerRule : public Rule
     {
+      bool isValidDigit(char c, integral_t base) const { 
+        return (base == 10 && std::isdigit(c)) || (base == 2 && (c == '0' || c == '1')) || 
+          (base == 16 && (std::isdigit(c) || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')));
+      }
+
     public:
       Token matches(const std::string_view input) const override
       {
-        bool hasSign = false;
+        enum class state { SIGN, BASE, DIGITS, VALID };
+        integral_t base = 10;
+        bool hasSign = false, finished = false, failed = false;
         size_t p = 0;
+        state s = state::SIGN;
 
-        if (input[p] == '-' /*|| input[p] == '+'*/)
+        while (p < input.length() && !finished)
         {
-          hasSign = true;
+          auto c = input[p];
+
+          switch (s) {
+            case state::SIGN:
+            {
+              if (c == '-' || c == '+') s = state::BASE;
+              else if (std::isdigit(c)) { s = state::BASE; --p; }
+              else { failed = true; finished = true; }
+              break;
+            }
+            case state::BASE:
+            {
+              if (c == '0' && lookahead(p + 1, input, 'x')) { ++p; s = state::DIGITS; base = 16; }
+              else if (c == '0' && lookahead(p + 1, input, 'b')) { ++p; s = state::DIGITS; base = 2; }
+              else if (std::isdigit(c)) { s = state::VALID; --p; }
+              else { failed = true; finished = true; }
+              break;
+            }
+            case state::DIGITS:
+            {
+              if (isValidDigit(c, base)) s = state::VALID;
+              else { finished = true; failed = true; }
+            }
+
+            case state::VALID:
+            {
+              if (input.length() == p || !isValidDigit(c, base))
+              {
+                if (std::isalnum(c))
+                  failed = true;
+                
+                --p;
+                finished = true;
+              }
+              break;
+            }
+          }
+
           ++p;
         }
 
-        while (p < input.length() && std::isdigit(input[p]))
-          ++p;
-
-        if (p > 0 && (!hasSign || p > 1) && Rule::hasSpaceOrNonDigitTermination(input, p))
+        if (!failed && s == state::VALID)
         {
           std::string copy = std::string(input.substr(0, p));
-          return Token(TokenType::INTEGRAL, input.substr(0, p), std::stoi(copy)); //TODO: stoi, choose according to integer_t type?
+          return Token(TokenType::INTEGRAL, copy, std::stoi(copy, nullptr, base));
         }
-
-        return TokenType::NONE;
+        else
+          return TokenType::NONE;
       }
     };
 
@@ -480,7 +522,7 @@ namespace nanoexpr
     private:
       void init();
 
-    public:
+    protected:
       std::unordered_map<opcode_t, std::vector<FunctionDefinition>> functors;
 
       void registerBinary(const opcode_t& opcode, Signature signature, binary_operation functor) { functors[opcode].push_back({ signature, functor, true }); }
@@ -498,6 +540,7 @@ namespace nanoexpr
         registerUnary(opcode, Signature(Cmp ? ValueType::BOOL : ValueType::REAL, ValueType::REAL), [](Value v) { return Value(F<real_t>()(v.r())); });
       }
 
+    public:
       /* TODO: could deduce signature from R and T */
       template<typename T, typename R, R(*func)(T)> void registerFreeUnaryFunction(const vm::opcode_t& opcode, ValueType returnType, ValueType arg1)
       {
@@ -661,7 +704,11 @@ namespace nanoexpr
       {
         //TODO: here we assume that identifier is already defined in symbol table, is that correct?
         const TypedValue* value = env->get(_identifier);
-        return CompileResult(value->type, [value = value->value]() { return value; });
+
+        if (value)
+          return CompileResult(value->type, [value = value->value]() { return value; });
+        else
+          return CompileResult("identifier not defined '" + _identifier + "'");
       }
 
       std::string textual(size_t indent = 0) const override { return std::string(indent, ' ') + "identifier(" + _identifier + ")\n"; }
@@ -975,8 +1022,6 @@ namespace nanoexpr
       }
     };
   }
-
-
 }
 
 void nanoexpr::vm::Functions::init()
@@ -1081,7 +1126,9 @@ nanoexpr::lex::LexerResult nanoexpr::lex::Lexer::parse(const std::string& text)
       /* a match has been found for this rule */
       if (token.valid())
       {
-        if (token.type() != TokenType::SKIP)
+        if (token.type() == TokenType::ERROR)
+          return { {}, false, token.textual() };
+        else if (token.type() != TokenType::SKIP)
           tokens.push_back(token);
 
         p += token.length();

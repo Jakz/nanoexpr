@@ -1,7 +1,6 @@
 #include <cstdlib>
 #include <cstdio>
 #include <iostream>
-#include <cassert>
 
 #include "nanoexpr.h"
 
@@ -26,13 +25,13 @@ template<size_t COUNT> void benchmark(const std::string& script, std::function<f
 
 int main()
 {
-  benchmark<10000>("(1.0/(a + 1.0) + 2/(a + 2.0)+ 3.0 / (a + 3.0))", [](float a) { return 1.0f / (a + 1.0f) + 2.0f / (a + 2.0f) + 3.0f / (a + 3.0f); }, 2.21f);
-  benchmark<10000>("sqrt(a)", [](float a) { return std::sqrt(a); }, 7.89f);
+  //benchmark<100000>("(1.0/(a + 1.0) + 2/(a + 2.0)+ 3.0 / (a + 3.0))", [](float a) { return 1.0f / (a + 1.0f) + 2.0f / (a + 2.0f) + 3.0f / (a + 3.0f); }, 2.21f);
+  //benchmark<100000>("1.0 + 2.0", [](float a) { return 1.0f + 2.0f; }, 7.89f);
 
-  getchar();
-  return 0;
+  //getchar();
+  //return 0;
   
-  auto input = "max(3.0 , 5)";
+  auto input = "max(3.0 , b)";
   bool execute = true;
 
   nanoexpr::lex::Lexer lexer;
@@ -147,8 +146,8 @@ void benchmark(const std::string& script, std::function<float(float)> native, fl
   using nano_cast = std::chrono::duration<float, std::nano>;
 
   std::cout << "benchmarking " << script << " with " << COUNT << " tries" << std::endl;
-  std::cout << "native took " << milli_cast(elapsed[1]).count() << "ms (" << nano_cast(elapsed[1]).count()/COUNT << " per iteration)" << std::endl;
-  std::cout << "interptreted took " << milli_cast(elapsed[0]).count() << "ms (" << nano_cast(elapsed[0]).count() / COUNT << " per iteration)" << std::endl;
+  std::cout << "native took " << milli_cast(elapsed[1]).count() << "ms (" << nano_cast(elapsed[1]).count()/COUNT << "ns per iteration)" << std::endl;
+  std::cout << "interptreted took " << milli_cast(elapsed[0]).count() << "ms (" << nano_cast(elapsed[0]).count() / COUNT << "ns per iteration)" << std::endl;
   std::cout << "ratio is " << (int)(100* nano_cast(elapsed[0]).count() / nano_cast(elapsed[1]).count()) << "%" << std::endl;
   std::cout << results[0] << " ~= " << results[1] << std::endl;
 }
