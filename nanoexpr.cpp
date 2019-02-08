@@ -3,18 +3,6 @@
 #include <iostream>
 #include <cassert>
 
-#include <cstdint>
-#include <unordered_map>
-#include <unordered_set>
-#include <string>
-#include <string_view>
-#include <regex>
-#include <vector>
-#include <memory>
-#include <array>
-#include <functional>
-#include <cctype>
-
 #include "nanoexpr.h"
 
 using namespace nanoexpr;
@@ -48,17 +36,17 @@ int main()
   bool execute = true;
 
   nanoexpr::lex::Lexer lexer;
-  auto result = lexer.parse(input);
+  auto lexResult = lexer.parse(input);
 
-  for (const auto& token : result.tokens)
+  for (const auto& token : lexResult.tokens)
     std::cout << token << std::endl;
 
-  if (!result.success)
+  if (!lexResult.success)
     std::cout << "lexer error: " << result.message << std::endl;
   else if (execute)
   {    
-    nanoexpr::parser::Parser parser(result.tokens);
-    auto ast =  parser.parse();
+    nanoexpr::parser::Parser parser;
+    auto parseResult =  parser.parse(lexResult.tokens);
 
     vm::Functions* functions = new vm::Functions();
     vm::Enums* enums = new vm::Enums();
@@ -71,27 +59,33 @@ int main()
 
     env.set("a", 2.21f);
 
-    auto result = ast->compile(&env);
-
-    if (result)
+    if (parseResult.success)
     {
-      std::cout << std::endl << ast->textual();
-            
-      Value v = result.lambda();
+      auto compileResult = parseResult.ast->compile(&env);
+      std::cout << std::endl << parseResult.ast->textual();
 
-      FooEnum ev = v.as<FooEnum>();
-      
-      std::cout << std::endl << input << " -> ";
-
-      switch (result.type)
+      if (compileResult)
       {
-        case ValueType::INTEGRAL: std::cout << v.i() << std::endl; break;
-        case ValueType::REAL: std::cout << v.r() << std::endl; break;
-        case ValueType::BOOL: std::cout << (v.b() ? "true" : "false") << std::endl; break;
+        Value v = compileResult.lambda();
+
+        FooEnum ev = v.as<FooEnum>();
+
+        std::cout << std::endl << input << " -> ";
+
+        switch (compileResult.type)
+        {
+          case ValueType::INTEGRAL: std::cout << v.i() << std::endl; break;
+          case ValueType::REAL: std::cout << v.r() << std::endl; break;
+          case ValueType::BOOL: std::cout << (v.b() ? "true" : "false") << std::endl; break;
+        }
       }
+      else
+        std::cout << "compiler error: " << compileResult.message << std::endl;
     }
     else
-      std::cout << "compiler error: " << result.message << std::endl;
+      std::cout << "parser error: " << parseResult.message << std::endl;
+
+
   }
 
   getchar();

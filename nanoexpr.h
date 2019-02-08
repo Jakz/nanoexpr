@@ -1,3 +1,15 @@
+#include <cstdint>
+#include <unordered_map>
+#include <unordered_set>
+#include <string>
+#include <string_view>
+#include <regex>
+#include <vector>
+#include <memory>
+#include <array>
+#include <functional>
+#include <cctype>
+
 namespace nanoexpr
 {
   using real_t = float;
@@ -41,8 +53,6 @@ namespace nanoexpr
 
     template<typename T, typename std::enable_if<!std::is_enum<T>::value, int>::type* = nullptr> T as() const;
     template<typename T, typename std::enable_if<std::is_enum<T>::value, int>::type* = nullptr> inline T as() const { return static_cast<T>(as<integral_t>()); }
-
-
 
     template<ValueType T> typename value_traits<T>::type as() { return as<typename value_traits<T>::type>(); }
   };
@@ -176,6 +186,8 @@ namespace nanoexpr
       Token matches(const std::string_view input) const override
       {
         size_t p = 0;
+
+        
 
         while (p < input.length())
         {
@@ -730,6 +742,13 @@ namespace nanoexpr
     using token_value_t = std::string;
     using namespace lex;
 
+    struct ParserResult
+    {
+      std::unique_ptr<ast::Expression> ast;
+      bool success;
+      std::string message;
+    };
+
     class Parser
     {
     protected:
@@ -895,8 +914,15 @@ namespace nanoexpr
       ast::Expression* fail(const std::string& message) { return nullptr; }
 
     public:
-      explicit Parser(const lex::token_list& tokens) : tokens(tokens), token(this->tokens.begin()) { }
-      ast::Expression* parse() { return expression(); }
+      explicit Parser() { }
+
+      ParserResult parse(const lex::token_list& tokens)
+      { 
+        this->tokens = tokens;
+        this->token = this->tokens.begin();
+        auto* ast = expression();
+        return { std::unique_ptr<ast::Expression>(ast), ast != nullptr, "" };
+      }
     };
   }
 
