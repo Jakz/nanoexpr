@@ -18,6 +18,9 @@ namespace nanoexpr
     using real_t = float;
     using integral_t = int32_t;
     static constexpr bool EnableIntegerPromotionToReal = true;
+    static constexpr bool EnableTrigonometricFunctions = true;
+    static constexpr bool EnableHyperbolicFunctions = true;
+    static constexpr bool OptimizationConstantFolding = true;
   }
 
 
@@ -465,16 +468,23 @@ namespace nanoexpr
       }
     };
 
+    struct FunctionDefinition
+    {
+      Signature signature;
+      VariantFunctor function;
+      bool isConstant;
+    };
+
     class Functions
     {
     private:
       void init();
 
     public:
-      std::unordered_map<opcode_t, std::vector<std::pair<Signature, VariantFunctor>>> functors;
+      std::unordered_map<opcode_t, std::vector<FunctionDefinition>> functors;
 
-      void registerBinary(const opcode_t& opcode, Signature signature, binary_operation functor) { functors[opcode].push_back(std::make_pair(signature, functor)); }
-      void registerUnary(const opcode_t& opcode, Signature signature, unary_operation functor) { functors[opcode].push_back(std::make_pair(signature, functor)); }
+      void registerBinary(const opcode_t& opcode, Signature signature, binary_operation functor) { functors[opcode].push_back({ signature, functor, true }); }
+      void registerUnary(const opcode_t& opcode, Signature signature, unary_operation functor) { functors[opcode].push_back({ signature, functor, true }); }
 
       template<bool Cmp, template<typename TT> typename F> void registerNumericBinary(const vm::opcode_t& opcode)
       {
@@ -488,26 +498,33 @@ namespace nanoexpr
         registerUnary(opcode, Signature(Cmp ? ValueType::BOOL : ValueType::REAL, ValueType::REAL), [](Value v) { return Value(F<real_t>()(v.r())); });
       }
 
+      /* TODO: could deduce signature from R and T */
       template<typename T, typename R, R(*func)(T)> void registerFreeUnaryFunction(const vm::opcode_t& opcode, ValueType returnType, ValueType arg1)
       {
         registerUnary(opcode, Signature(returnType, arg1), [](Value v) { return Value(func(v.as<T>())); });
       }
 
+      /* TODO: could deduce signature from R and T */
+      template<typename T, typename R, typename U, R(*func)(T, U)> void registerFreeBinaryFunction(const vm::opcode_t& opcode, ValueType returnType, ValueType arg1, ValueType arg2)
+      {
+        registerBinary(opcode, Signature(returnType, arg1, arg2), [](Value v1, Value v2) { return Value(func(v1.as<T>(), v2.as<T>())); });
+      }
+
     public:
-      std::pair<ValueType, const VariantFunctor*> find(const opcode_t& opcode, ValueType t1, ValueType t2 = ValueType::NONE, ValueType t3 = ValueType::NONE) const
+      const FunctionDefinition* find(const opcode_t& opcode, ValueType t1, ValueType t2 = ValueType::NONE, ValueType t3 = ValueType::NONE) const
       {
         const auto& functorsByOpcode = functors.find(opcode);
 
         if (functorsByOpcode != functors.end())
         {
           Signature actual = Signature(ValueType::NONE, t1, t2, t3);
-          auto it = std::find_if(functorsByOpcode->second.begin(), functorsByOpcode->second.end(), [&actual](const auto& pair) { return pair.first == actual; });
+          auto it = std::find_if(functorsByOpcode->second.begin(), functorsByOpcode->second.end(), [&actual](const auto& definition) { return definition.signature == actual; });
 
           if (it != functorsByOpcode->second.end())
-            return std::make_pair(it->first.returnType, &it->second);
+            return &(*it);
         }
 
-        return std::make_pair(ValueType::NONE, nullptr);
+        return nullptr;
       }
 
       Functions() { init(); }
@@ -561,7 +578,7 @@ namespace nanoexpr
     public:
       Environment(const Functions* functions, const Enums* enums) : functions(functions), enums(enums) { }
 
-      std::pair<ValueType, const VariantFunctor*> findFunction(const opcode_t& opcode, ValueType t1, ValueType t2 = ValueType::NONE, ValueType t3 = ValueType::NONE) const { return functions->find(opcode, t1, t2, t3); }
+      const FunctionDefinition* findFunction(const opcode_t& opcode, ValueType t1, ValueType t2 = ValueType::NONE, ValueType t3 = ValueType::NONE) const { return functions->find(opcode, t1, t2, t3); }
       auto findEnum(const std::string& name, const std::string& value) const { return enums->findEnum(name, value); }
 
       void set(const std::string& ident, TypedValue value) { variables.emplace(std::make_pair(ident, value)); }
@@ -580,6 +597,7 @@ namespace nanoexpr
 
       CompileResult(ValueType type, vm::lambda_t lambda) : success(true), type(type), message(""), lambda(lambda) { }
       CompileResult(std::string&& message) : success(false), type(ValueType::NONE), message(message) { }
+      CompileResult() : success(false) { }
 
       operator bool() const { return success; }
 
@@ -596,9 +614,12 @@ namespace nanoexpr
 
     class Expression
     {
+    protected:
+
     public:
       virtual CompileResult compile(const vm::Environment* env) const = 0;
       virtual std::string textual(size_t indent = 0) const = 0;
+      virtual bool isConstant(const vm::Environment* env) const { return false; }
     };
 
     class LiteralValue : public Expression
@@ -609,13 +630,14 @@ namespace nanoexpr
 
     public:
       template<typename T> LiteralValue(ValueType type, T value) : _type(type), _value(value) { }
+      bool isConstant(const vm::Environment* env) const override{ return true; }
 
       CompileResult compile(const vm::Environment*) const override
       {
         return CompileResult(_type, [value = _value]() { return value; });
       }
 
-      virtual std::string textual(size_t indent) const override
+      std::string textual(size_t indent) const override
       {
         auto result = std::string(indent, ' ') + "value(";
         if (_type == ValueType::INTEGRAL) return result + std::to_string(_value.i()) + ")\n";
@@ -632,6 +654,8 @@ namespace nanoexpr
 
     public:
       Identifier(const std::string& identifier) : _identifier(identifier) { }
+      bool isConstant(const vm::Environment* env) const override { return true; } //TODO: should fetch value from env and decide
+
 
       CompileResult compile(const vm::Environment* env) const override
       {
@@ -651,6 +675,7 @@ namespace nanoexpr
 
     public:
       EnumValue(const std::string& enumName, const std::string& enumValue) : _enumName(enumName), _enumValue(enumValue) { }
+      bool isConstant(const vm::Environment* env) const override { return true; }
 
       CompileResult compile(const vm::Environment* env) const override
       {
@@ -678,6 +703,7 @@ namespace nanoexpr
         for (Expression* arg : args)
           _args.emplace_back(arg);
       }
+      bool isConstant(const vm::Environment* env) const override { return true; } // TODO env.functions->find()->isConstant
 
       CompileResult compile(const vm::Environment* env) const override
       {
@@ -701,18 +727,28 @@ namespace nanoexpr
           while (retry)
           {
 
-            auto entry = env->findFunction(_identifier, types[0], types[1], types[2]);
-            const auto* functor = entry.second;
+            auto definition = env->findFunction(_identifier, types[0], types[1], types[2]);
 
-            if (functor != nullptr)
+            if (definition != nullptr)
             {
+              const auto& functor = definition->function;
+              CompileResult result;
+
               switch (_args.size())
               {
-                case 0: return CompileResult(entry.first, [function = functor->nullary]() { return function(); });
-                case 1: return CompileResult(entry.first, [function = functor->unary, first = args[0].lambda]() { return function(first()); });
-                case 2: return CompileResult(entry.first, [function = functor->binary, first = args[0].lambda, second = args[1].lambda]() { return function(first(), second()); });
+                case 0: result = CompileResult(definition->signature.returnType, [function = functor.nullary]() { return function(); }); break;
+                case 1: result = CompileResult(definition->signature.returnType, [function = functor.unary, first = args[0].lambda]() { return function(first()); }); break;
+                case 2: result = CompileResult(definition->signature.returnType, [function = functor.binary, first = args[0].lambda, second = args[1].lambda]() { return function(first(), second()); }); break;
                   //TODO: ternary
               }
+
+              if (config::OptimizationConstantFolding && std::all_of(_args.begin(), _args.end(), [env](const auto& arg) { return arg->isConstant(env); }) && definition->isConstant)
+              {
+                Value value = result.lambda();
+                result.lambda = [value = value] { return value; };
+              }
+
+              return result;
             }
             else
             {
@@ -979,10 +1015,35 @@ void nanoexpr::vm::Functions::init()
   registerUnary("!", vm::Signature(VT::BOOL, VT::BOOL), [](V v) { return std::logical_not<bool>()(v.b()); });
 
   /* builtins */
+  registerBinary("min", { ValueType::INTEGRAL, ValueType::INTEGRAL, ValueType::INTEGRAL }, [](V v1, V v2) { return std::min(v1.i(), v2.i()); });
+  registerBinary("min", { ValueType::REAL, ValueType::REAL, ValueType::REAL }, [](V v1, V v2) { return std::min(v1.r(), v2.r()); });
+  registerBinary("max", { ValueType::INTEGRAL, ValueType::INTEGRAL, ValueType::INTEGRAL }, [](V v1, V v2) { return std::max(v1.i(), v2.i()); });
+  registerBinary("max", { ValueType::REAL, ValueType::REAL, ValueType::REAL }, [](V v1, V v2) { return std::max(v1.r(), v2.r()); });
+
   registerFreeUnaryFunction<real_t, real_t, std::abs>("abs", ValueType::REAL, ValueType::REAL);
   registerFreeUnaryFunction<integral_t, integral_t, std::abs>("abs", ValueType::INTEGRAL, ValueType::INTEGRAL);
   registerFreeUnaryFunction<real_t, real_t, std::sqrt>("sqrt", ValueType::REAL, ValueType::REAL);
 
+  if (nanoexpr::config::EnableTrigonometricFunctions)
+  {
+    registerFreeUnaryFunction<real_t, real_t, std::cos>("cos", ValueType::REAL, ValueType::REAL);
+    registerFreeUnaryFunction<real_t, real_t, std::sin>("sin", ValueType::REAL, ValueType::REAL);
+    registerFreeUnaryFunction<real_t, real_t, std::tan>("tan", ValueType::REAL, ValueType::REAL);
+    registerFreeUnaryFunction<real_t, real_t, std::acos>("acos", ValueType::REAL, ValueType::REAL);
+    registerFreeUnaryFunction<real_t, real_t, std::acos>("asin", ValueType::REAL, ValueType::REAL);
+    registerFreeUnaryFunction<real_t, real_t, std::atan>("atan", ValueType::REAL, ValueType::REAL);
+    registerFreeBinaryFunction<real_t, real_t, real_t, std::atan2>("atan", ValueType::REAL, ValueType::REAL, ValueType::REAL);
+  }
+
+  if (nanoexpr::config::EnableHyperbolicFunctions)
+  {
+    registerFreeUnaryFunction<real_t, real_t, std::cosh>("cosh", ValueType::REAL, ValueType::REAL);
+    registerFreeUnaryFunction<real_t, real_t, std::sinh>("sinh", ValueType::REAL, ValueType::REAL);
+    registerFreeUnaryFunction<real_t, real_t, std::tanh>("tanh", ValueType::REAL, ValueType::REAL);
+    registerFreeUnaryFunction<real_t, real_t, std::acosh>("acosh", ValueType::REAL, ValueType::REAL);
+    registerFreeUnaryFunction<real_t, real_t, std::acosh>("asinh", ValueType::REAL, ValueType::REAL);
+    registerFreeUnaryFunction<real_t, real_t, std::atanh>("atanh", ValueType::REAL, ValueType::REAL);
+  }
 }
 
 nanoexpr::lex::Lexer::Lexer()
@@ -999,7 +1060,7 @@ nanoexpr::lex::Lexer::Lexer()
                                         "==", "!=", ">=", "<=", ">", "<"
                                       }
   ));
-  rules.emplace_back(new OperatorRule(TokenType::SYMBOL, false, { "(", ")", "::"/*, ":", "?" */ }));
+  rules.emplace_back(new OperatorRule(TokenType::SYMBOL, false, { "(", ")", ",", "::"/*, ":", "?" */ }));
 }
 
 nanoexpr::lex::LexerResult nanoexpr::lex::Lexer::parse(const std::string& text)

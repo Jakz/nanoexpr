@@ -26,13 +26,13 @@ template<size_t COUNT> void benchmark(const std::string& script, std::function<f
 
 int main()
 {
-  benchmark<1000>("(1.0/(a + 1.0) + 2/(a + 2.0)+ 3.0 / (a + 3.0))", [](float a) { return 1.0f / (a + 1.0f) + 2.0f / (a + 2.0f) + 3.0f / (a + 3.0f); }, 2.21f);
-  benchmark<1000>("sqrt(a)", [](float a) { return std::sqrt(a); }, 7.89f);
+  benchmark<10000>("(1.0/(a + 1.0) + 2/(a + 2.0)+ 3.0 / (a + 3.0))", [](float a) { return 1.0f / (a + 1.0f) + 2.0f / (a + 2.0f) + 3.0f / (a + 3.0f); }, 2.21f);
+  benchmark<10000>("sqrt(a)", [](float a) { return std::sqrt(a); }, 7.89f);
 
   getchar();
   return 0;
   
-  auto input = "(1.0/(a+1)+2/(a+2)+3/(a+3))";
+  auto input = "max(3.0 , 5)";
   bool execute = true;
 
   nanoexpr::lex::Lexer lexer;
@@ -42,7 +42,7 @@ int main()
     std::cout << token << std::endl;
 
   if (!lexResult.success)
-    std::cout << "lexer error: " << result.message << std::endl;
+    std::cout << "lexer error: " << lexResult.message << std::endl;
   else if (execute)
   {    
     nanoexpr::parser::Parser parser;
@@ -100,12 +100,12 @@ void benchmark(const std::string& script, std::function<float(float)> native, fl
 {
   nanoexpr::lex::Lexer lexer;
   auto lexerResult = lexer.parse(script);
-  auto parser = nanoexpr::parser::Parser(lexerResult.tokens);
-  auto ast = parser.parse();
+  auto parser = nanoexpr::parser::Parser();
+  auto parseResult = parser.parse(lexerResult.tokens);
   
   for (const auto& token : lexerResult.tokens)
     std::cout << token << std::endl;
-  std::cout << std::endl << ast->textual() << std::endl;
+  std::cout << std::endl << parseResult.ast->textual() << std::endl;
   
   vm::Functions* functions = new vm::Functions();
   vm::Enums* enums = new vm::Enums();
@@ -113,7 +113,7 @@ void benchmark(const std::string& script, std::function<float(float)> native, fl
   vm::Environment env(functions, enums);
   env.set("a", arg);
 
-  auto result = ast->compile(&env);
+  auto result = parseResult.ast->compile(&env);
 
   float results[2];
   std::chrono::steady_clock::duration elapsed[2];
