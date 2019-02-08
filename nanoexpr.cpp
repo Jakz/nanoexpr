@@ -85,11 +85,7 @@ namespace nanoexpr
       NONE, SKIP,
 
       IDENTIFIER,
-      STRING,
-      FLOAT_LITERAL,
-      INTEGRAL_LITERAL,
-      BOOLEAN_LITERAL,
-
+      STRING, FLOAT, INTEGRAL, BOOLEAN,
       OPERATOR, SYMBOL
     };
 
@@ -286,7 +282,7 @@ namespace nanoexpr
         if (!failed)
         {
           std::string copy = std::string(input.substr(0, p));
-          return Token(TokenType::FLOAT_LITERAL, copy, std::stof(copy));
+          return Token(TokenType::FLOAT, copy, std::stof(copy));
         }
         else
           return TokenType::NONE;
@@ -313,7 +309,7 @@ namespace nanoexpr
         if (p > 0 && (!hasSign || p > 1) && Rule::hasSpaceOrNonDigitTermination(input, p))
         {
           std::string copy = std::string(input.substr(0, p));
-          return Token(TokenType::INTEGRAL_LITERAL, input.substr(0, p), std::stoi(copy)); //TODO: stoi, choose according to integer_t type?
+          return Token(TokenType::INTEGRAL, input.substr(0, p), std::stoi(copy)); //TODO: stoi, choose according to integer_t type?
         }
 
         return TokenType::NONE;
@@ -326,9 +322,9 @@ namespace nanoexpr
       Token matches(const std::string_view input) const override
       {
         if (Rule::matches(input, "false"))
-          return Token(TokenType::BOOLEAN_LITERAL, "false", false);
+          return Token(TokenType::BOOLEAN, "false", false);
         else if (Rule::matches(input, "true"))
-          return Token(TokenType::BOOLEAN_LITERAL, "true", true);
+          return Token(TokenType::BOOLEAN, "true", true);
         else
           return TokenType::NONE;
       }
@@ -851,11 +847,11 @@ namespace nanoexpr
       /* primary ::= BOOL | INT | FLOAT | '(' expression ')' | IDENTIFIER | IDENTIFIER '(' ( expression ',' ) * ')' */
       ast::Expression* primary()
       {
-        if (match(TokenType::BOOLEAN_LITERAL))
+        if (match(TokenType::BOOLEAN))
           return new ast::LiteralValue(ValueType::BOOL, previous()->value());
-        else if (match(TokenType::INTEGRAL_LITERAL))
+        else if (match(TokenType::INTEGRAL))
           return new ast::LiteralValue(ValueType::INTEGRAL, previous()->value());
-        else if (match(TokenType::FLOAT_LITERAL))
+        else if (match(TokenType::FLOAT))
           return new ast::LiteralValue(ValueType::REAL, previous()->value());
         else if (match(TokenType::SYMBOL, { "(" }))
         {
@@ -980,7 +976,7 @@ nanoexpr::lex::Lexer::Lexer()
       "==", "!=", ">=", "<=", ">", "<"
     }
   ));
-  rules.emplace_back(new OperatorRule(TokenType::SYMBOL, false, { "(", ")", "::" }));
+  rules.emplace_back(new OperatorRule(TokenType::SYMBOL, false, { "(", ")", "::"/*, ":", "?" */}));
 }
 
 nanoexpr::lex::LexerResult nanoexpr::lex::Lexer::parse(const std::string& text)
@@ -1025,14 +1021,13 @@ using namespace nanoexpr;
 std::ostream& operator<<(std::ostream& out, const lex::Token& token)
 {
   switch (token.type()) {
-    case lex::TokenType::BOOLEAN_LITERAL: out << "bool(" << (token.value().boolean ? "true" : "false") << ")"; break;
-    case lex::TokenType::FLOAT_LITERAL: out << "float(" << token.value().real << ")"; break;
-    case lex::TokenType::INTEGRAL_LITERAL: out << "int(" << token.value().integral << ")"; break;
+    case lex::TokenType::BOOLEAN: out << "bool(" << (token.value().boolean ? "true" : "false") << ")"; break;
+    case lex::TokenType::FLOAT: out << "float(" << token.value().real << ")"; break;
+    case lex::TokenType::INTEGRAL: out << "int(" << token.value().integral << ")"; break;
     case lex::TokenType::OPERATOR: out << "operator('" << token.textual() << "')"; break;
     case lex::TokenType::SYMBOL: out << "symbol('" << token.textual() << "')"; break;
     case lex::TokenType::IDENTIFIER: out << "identifier(" << token.textual() << ")"; break;
     case lex::TokenType::STRING: out << "string(" << token.string()  << ")"; break;
-
   }
 
   return out;
@@ -1042,7 +1037,9 @@ template<size_t COUNT> void benchmark(const std::string& script, std::function<f
 
 int main()
 {
-  benchmark<10000>("(1.0/(a+1)+2/(a+2)+3/(a+3))", [](float a) { return 1.0f / (a + 1) + 2 / (a + 2) + 3 / (a + 3); }, 2.21f);
+  benchmark<1000000>("(1.0/(a + 1.0) + 2/(a + 2.0)+ 3.0 / (a + 3.0))", [](float a) { return 1.0f / (a + 1.0f) + 2.0f / (a + 2.0f) + 3.0f / (a + 3.0f); }, 2.21f);
+  benchmark<1000000>("sqrt(a)", [](float a) { return std::sqrt(a); }, 7.89f);
+
   getchar();
   return 0;
   
@@ -1153,7 +1150,9 @@ void benchmark(const std::string& script, std::function<float(float)> native, fl
     }
   }
 
-  std::cout << "native took " << std::chrono::duration<float, std::milli>(elapsed[1]).count() << "ms" << std::endl;
-  std::cout << "interptreted took " << std::chrono::duration<float, std::milli>(elapsed[0]).count() << "ms" << std::endl;
+  std::cout << "benchmarking " << script << " with " << COUNT << " tries" << std::endl;
+  std::cout << "native took " << std::chrono::duration<float, std::milli>(elapsed[1]).count() << "ms (" << std::chrono::duration<float, std::nano>(elapsed[1]).count()/COUNT << " per try)" << std::endl;
+  std::cout << "interptreted took " << std::chrono::duration<float, std::milli>(elapsed[0]).count() << "ms (" << std::chrono::duration<float, std::nano>(elapsed[0]).count() / COUNT << " per try)" << std::endl;
+  std::cout << "ratio is " << (int)(100*std::chrono::duration<float, std::nano>(elapsed[0]).count() / std::chrono::duration<float, std::nano>(elapsed[1]).count()) << "%" << std::endl;
   std::cout << results[0] << " ~= " << results[1];
 }
