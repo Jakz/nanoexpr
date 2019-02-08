@@ -11,16 +11,16 @@ The phases are
 
 So there's no VM which actually executes the code, but C++14 named value bindings to lambda come to rescue and allows nesting lambdas, for example:
 
-`LiteralValue(4.0)` is compiled as `[](vm::Environment* env) { return Value(4.0); }`, while a standard function call like `3.0 + 4.0` is compiled by invoking the lhs and rhs lambdas and then combine the result, eg:
+`LiteralValue(4.0)` is compiled as `[](vm::Environment* env) { return Value(4.0); }`, while a standard function call like `3.0 + 4.0` is compiled by invoking the *lhs* and *rhs* lambdas and then combine the result, eg:
 
     std::function<Value()> BinaryFunction::compile()
     {
       auto function = [] (const Value v1, const Value v2) { return v1 + v2; }
       auto left = left->compile();
       auto right = right->compile();
-      return [left = left, right = right, function = function] { return function(left(), right());
+      return [left = left, right = right, function = function] { return function(left(), right()); }
     }
     
-Which is rather simple to implement and have the advantage of being easily foldable to another value if we now that what this calculates is constant.
+Which is rather simple to implement and has the advantage of being easily foldable to another value if we now that what this calculates is constant.
 
 The language supports `int`, `float` and `bool` types for now, many std functions are being added which can be optionally be excluded.
