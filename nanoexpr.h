@@ -361,7 +361,7 @@ namespace nanoexpr
         if (!failed && s == state::VALID)
         {
           std::string copy = std::string(input.substr(0, p));
-          return Token(TokenType::INTEGRAL, copy, std::stoi(copy, nullptr, base));
+          return Token(TokenType::INTEGRAL, copy, std::stoi(base != 10 ? copy.substr(2) : copy, nullptr, base));
         }
         else
           return TokenType::NONE;
