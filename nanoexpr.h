@@ -103,18 +103,22 @@ namespace nanoexpr
       TokenType _type;
       std::string _textual;
       Value _value;
+      size_t _consumed;
 
     public:
       Token(TokenType type) : _type(type), _value(0) { }
-      Token(TokenType type, std::string_view textual) : _type(type), _textual(textual), _value(0) { }
+      Token(TokenType type, std::string_view textual) : _type(type), _textual(textual), _value(0), _consumed(textual.size()) { }
+      Token(TokenType type, std::string_view textual, size_t consumed) : _type(type), _textual(textual), _value(0), _consumed(consumed) { }
+
       Token(const std::string& message) : _type(TokenType::ERROR), _textual(message), _value(0) { }
-      template<typename T, typename std::enable_if<!std::is_enum<T>::value>::type* = nullptr> Token(TokenType type, std::string_view textual, T value) : _type(type), _textual(textual), _value(value) { }
+      template<typename T, typename std::enable_if<!std::is_enum<T>::value>::type* = nullptr> Token(TokenType type, std::string_view textual, T value) : _type(type), _textual(textual), _value(value), _consumed(textual.size()) { }
 
       TokenType type() const { return _type; }
       size_t length() const { return _textual.length(); }
       const Value& value() const { return _value; }
       const auto& textual() const { return _textual; }
-      std::string string() const { return _textual.substr(1, _textual.length() - 2); }
+      const std::string& string() const { return _textual; }
+      size_t consumed() const { return _consumed; }
 
       bool valid() const { return _type != TokenType::NONE && _type != TokenType::ERROR; }
 
@@ -240,9 +244,9 @@ namespace nanoexpr
           while (true)
           {
             if (p >= input.length()) /* end before closing string*/
-              return TokenType::NONE;
-            else if (p == delim)
-              return Token(TokenType::STRING, input.substr(0, p));
+              return Token(TokenType::ERROR, "unclosed string literal");
+            else if (input[p] == delim)
+              return Token(TokenType::STRING, input.substr(1, p-1), p+1);
             else //TODO: manage escape \delim
               ++p;
           }
@@ -322,7 +326,7 @@ namespace nanoexpr
           switch (s) {
             case state::SIGN:
             {
-              if (c == '-' || c == '+') s = state::BASE;
+              if (c == '-' || c == '+') { s = state::BASE; hasSign = true; }
               else if (std::isdigit(c)) { s = state::BASE; --p; }
               else { failed = true; finished = true; }
               break;
@@ -360,8 +364,11 @@ namespace nanoexpr
 
         if (!failed && s == state::VALID)
         {
-          std::string copy = std::string(input.substr(0, p));
-          return Token(TokenType::INTEGRAL, copy, std::stoi(base != 10 ? copy.substr(2) : copy, nullptr, base));
+          //TODO: rather hacky, we skip first 2 chars if there's a base specifier then we insert sign if it was present at beginning
+          std::string copy = std::string(base != 10 ? input.substr(hasSign ? 3 : 2, p - (hasSign ? 3 : 2) + 1) : input.substr(0,p));
+          if (hasSign && base != 10) 
+            copy.insert(copy.begin(), input[0]);
+          return Token(TokenType::INTEGRAL, input.substr(0, p), std::stoi(copy, nullptr, base));
         }
         else
           return TokenType::NONE;
@@ -1068,6 +1075,8 @@ void nanoexpr::vm::Functions::init()
   registerFreeUnaryFunction<real_t, real_t, std::abs>("abs", ValueType::REAL, ValueType::REAL);
   registerFreeUnaryFunction<integral_t, integral_t, std::abs>("abs", ValueType::INTEGRAL, ValueType::INTEGRAL);
   registerFreeUnaryFunction<real_t, real_t, std::sqrt>("sqrt", ValueType::REAL, ValueType::REAL);
+  registerFreeUnaryFunction<real_t, real_t, std::cbrt>("cbrt", ValueType::REAL, ValueType::REAL);
+
 
   if (nanoexpr::config::EnableTrigonometricFunctions)
   {
@@ -1098,10 +1107,11 @@ nanoexpr::lex::Lexer::Lexer()
   rules.emplace_back(new FloatingRule());
   rules.emplace_back(new IntegerRule());
   rules.emplace_back(new IdentifierRule());
+  rules.emplace_back(new StringRule());
   rules.emplace_back(new OperatorRule(TokenType::OPERATOR, false,
                                       {
                                         "+", "-", "*", "/", "%",
-                                        "||", "&&", "!", "~",
+                                        "||", "&&", "!", "~", "|", "&"
                                         "==", "!=", ">=", "<=", ">", "<"
                                       }
   ));
@@ -1121,7 +1131,7 @@ nanoexpr::lex::LexerResult nanoexpr::lex::Lexer::parse(const std::string& text)
 
     for (const auto& rule : rules)
     {
-      auto token = rule->matches(input);
+      lex::Token token = rule->matches(input);
 
       /* a match has been found for this rule */
       if (token.valid())
@@ -1131,7 +1141,7 @@ nanoexpr::lex::LexerResult nanoexpr::lex::Lexer::parse(const std::string& text)
         else if (token.type() != TokenType::SKIP)
           tokens.push_back(token);
 
-        p += token.length();
+        p += token.consumed();
         foundAny = true;
         break;
       }
