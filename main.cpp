@@ -22,6 +22,10 @@ std::ostream& operator<<(std::ostream& out, const lex::Token& token)
 
 template<size_t COUNT> void benchmark(const std::string& script, std::function<float(float)> native, float arg);
 
+struct Foo
+{
+  int x, y;
+};
 
 int main()
 {
@@ -31,7 +35,7 @@ int main()
   //getchar();
   //return 0;
   
-  auto input = "max(3.0 , b)";
+  auto input = "rand()";
   bool execute = true;
 
   nanoexpr::lex::Lexer lexer;
@@ -56,6 +60,10 @@ int main()
 
     vm::Environment env(functions, enums);
 
+    ValueType fooType = env.mapCustomType<Foo>();
+
+    //functions->registerUnregisary("getFoo", )
+
     env.set("a", 2.21f);
 
     if (parseResult.success)
@@ -65,17 +73,20 @@ int main()
 
       if (compileResult)
       {
-        Value v = compileResult.lambda();
-
-        FooEnum ev = v.as<FooEnum>();
-
-        std::cout << std::endl << input << " -> ";
-
-        switch (compileResult.type)
+        for (size_t r = 0; r < 2; ++r)
         {
-          case ValueType::INTEGRAL: std::cout << v.i() << std::endl; break;
-          case ValueType::REAL: std::cout << v.r() << std::endl; break;
-          case ValueType::BOOL: std::cout << (v.b() ? "true" : "false") << std::endl; break;
+          Value v = compileResult.lambda();
+
+          FooEnum ev = v.as<FooEnum>();
+
+          std::cout << std::endl << input << " -> ";
+
+          switch (compileResult.type)
+          {
+            case ValueType::INTEGRAL: std::cout << v.i() << std::endl; break;
+            case ValueType::REAL: std::cout << v.r() << std::endl; break;
+            case ValueType::BOOL: std::cout << (v.b() ? "true" : "false") << std::endl; break;
+          }
         }
       }
       else

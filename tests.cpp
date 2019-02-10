@@ -120,8 +120,6 @@ using TT = lex::TokenType;
 
 TEST_CASE("lexer") 
 {
-  tokenizeAndCheck("'foobar'", { { TT::STRING, "foobar" } });
-
   SECTION("integral literals")
   {
     tokenizeAndCheck("0 1 12 512", { 0, 1, 12, 512 });
@@ -203,6 +201,9 @@ TEST_CASE("lexer")
 
   SECTION("string literals")
   {
+    tokenizeAndCheck("'foobar'", { { TT::STRING, "foobar" } });
+    tokenizeAndCheck("''", { {TT::STRING, ""} });
+    lexerShouldFail({ "'foob" });
   }
 }
 
