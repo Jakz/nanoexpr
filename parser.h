@@ -320,7 +320,7 @@ namespace nanoexpr
         return primary();
       }
 
-      /* primary ::= BOOL | INT | FLOAT | '(' expression ')' | IDENTIFIER | IDENTIFIER '(' ( expression ',' ) * ')' */
+      /* primary ::= BOOL | INT | FLOAT | '(' expression ')' | IDENTIFIER | IDENTIFIER ('.' IDENTIFIER)? '(' ( expression ',' ) * ')' */
       ast::Expression* primary()
       {
         if (match(TokenType::BOOLEAN))
@@ -337,14 +337,36 @@ namespace nanoexpr
         }
         else if (match(TokenType::IDENTIFIER))
         {
+          bool hasParen = peek().match(TokenType::SYMBOL, "("), hasDot = peek().match(TokenType::SYMBOL, ".");
+          
           /* it's a function call */
-          if (!finished() && peek().match(TokenType::SYMBOL, "("))
-          {
+          if (!finished() && (hasParen || hasDot))
+          {            
             std::string identifier = previous()->textual();
 
             advance();
             std::vector<ast::Expression*> arguments;
             bool done = false;
+
+            if (hasDot)
+            {
+              /* we expect another identifier*/
+              if (!match(TokenType::IDENTIFIER))
+                return fail("epxected identifier after member call with '.'");
+              else
+              {
+                std::string functionName = previous()->textual();
+
+                if (!peek().match(TokenType::SYMBOL, "("))
+                  return fail("expected argument list after member call");
+
+                /* we swap identifiers since first one was object on which function is called */
+                advance();
+                arguments.push_back(new ast::Identifier(identifier));
+                identifier = std::move(functionName);
+              }
+
+            }
 
             /* comma separated expressions as arguments */
 

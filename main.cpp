@@ -35,7 +35,7 @@ int main()
   //getchar();
   //return 0;
   
-  auto input = "getX(foo)";
+  auto input = "foo.getX()";
   bool execute = true;
 
   nanoexpr::lex::Lexer lexer;
@@ -56,7 +56,6 @@ int main()
 
     enum class FooEnum { FIELD = 5, OTHER_FIELD = 100};
     enums->registerEnum<FooEnum>("FooEnum", { {"FIELD", FooEnum::FIELD }, {"OTHER_FIELD", FooEnum::OTHER_FIELD } });
-
 
     vm::Environment env(functions, enums);
 

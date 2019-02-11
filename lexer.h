@@ -387,7 +387,7 @@ nanoexpr::lex::Lexer::Lexer() noexcept
                                         "==", "!=", ">=", "<=", ">", "<"
                                       }
   ));
-  rules.emplace_back(new OperatorRule(TokenType::SYMBOL, false, { "(", ")", ",", "::"/*, ":", "?" */ }));
+  rules.emplace_back(new OperatorRule(TokenType::SYMBOL, false, { "(", ")", ",", "::", "."/*, ":", "?" */ }));
 }
 
 nanoexpr::lex::LexerResult nanoexpr::lex::Lexer::parse(const std::string& text)
