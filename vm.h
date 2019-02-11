@@ -170,6 +170,8 @@ namespace nanoexpr::vm
 
       return std::make_pair(false, Value(0));
     }
+
+
   };
 
   class Engine;
@@ -186,8 +188,8 @@ namespace nanoexpr::vm
 
   public:
     void set(const std::string& ident, TypedValue value) { _variables.emplace(std::make_pair(ident, value)); }
-    const TypedValue* get(const std::string& identifier) const { auto it = _variables.find(identifier); return it != _variables.end() ? &it->second : nullptr; }
-
+    const TypedValue* get(const std::string& identifier) const;
+ 
     const Engine& engine() const { return _engine; }
 
     friend class Engine;
@@ -199,6 +201,7 @@ namespace nanoexpr::vm
     Functions _functions;
     Enums _enums;
     ValueType _customTypeMapping;
+    std::unordered_map<std::string, TypedValue> _globals;
 
   public:
     Engine() : _customTypeMapping(ValueType::FIRST_CUSTOM_TYPE) { }
@@ -209,10 +212,21 @@ namespace nanoexpr::vm
     Enums& enums() { return _enums; }
     Functions& functions() { return _functions; }
 
+    template<typename T> void setGlobal(const std::string& identifier, T value) { _globals.emplace(std::make_pair(identitifer, value)); }
+    const TypedValue* getGlobal(const std::string& identifier) const { auto it = _globals.find(identifier); return it != _globals.end() ? &it->second : nullptr; }
+
     template<typename T> ValueType mapCustomType() { ValueType current = _customTypeMapping; _customTypeMapping = (ValueType)((std::underlying_type_t<ValueType>)_customTypeMapping + 1); return current; }
 
     Environment createEnvironment() { return Environment(*this); }
   };
+
+  const TypedValue* Environment::get(const std::string& identifier) const {
+    auto it = _variables.find(identifier);
+    if (it != _variables.end())
+      return &it->second;
+
+    return _engine.getGlobal(identifier);
+  }
 }
 
 void nanoexpr::vm::Functions::init()
