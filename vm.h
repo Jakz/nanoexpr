@@ -8,6 +8,7 @@ namespace nanoexpr::vm
   using nullary_operation = std::function<Value()>;
   using unary_operation = std::function<Value(Value)>;
   using binary_operation = std::function<Value(Value, Value)>;
+  using ternary_operation = std::function<Value(Value, Value, Value)>;
   using lambda_t = std::function<Value()>;
 
   class Signature
@@ -33,11 +34,13 @@ namespace nanoexpr::vm
       nullary_operation nullary;
       unary_operation unary;
       binary_operation binary;
+      ternary_operation ternary;
     };
 
     VariantFunctor(nullary_operation nullary) : args(1), nullary(nullary) { }
     VariantFunctor(unary_operation unary) : args(1), unary(unary) { }
     VariantFunctor(binary_operation binary) : args(2), binary(binary) { }
+    VariantFunctor(ternary_operation binary) : args(2), ternary(binary) { }
     VariantFunctor(const VariantFunctor& o) { this->operator=(o); }
 
     VariantFunctor& operator=(const VariantFunctor& o)
@@ -48,6 +51,7 @@ namespace nanoexpr::vm
         case 0: new (&nullary) nullary_operation(); this->nullary = o.nullary; break;
         case 1: new (&unary) unary_operation(); this->unary = o.unary; break;
         case 2: new (&binary) binary_operation(); this->binary = o.binary; break;
+        case 3: new (&ternary) ternary_operation(); this->ternary = o.ternary; break;
       }
 
       return *this;
@@ -59,6 +63,7 @@ namespace nanoexpr::vm
         case 0: nullary.~nullary_operation(); break;
         case 1: unary.~unary_operation(); break;
         case 2: binary.~binary_operation(); break;
+        case 3: ternary.~ternary_operation(); break;
       }
     }
   };
@@ -91,6 +96,7 @@ namespace nanoexpr::vm
     }
 
   public:
+    void registerTernary(const opcode_t& opcode, ValueType returnType, ValueType arg1, ValueType arg2, ValueType arg3, bool isConstant, ternary_operation functor) { functors[opcode].push_back({ Signature(returnType, arg1, arg2, arg3), functor, true }); }
     void registerBinary(const opcode_t& opcode, ValueType returnType, ValueType arg1, ValueType arg2, binary_operation functor) { functors[opcode].push_back({ Signature(returnType, arg1, arg2), functor, true }); }
     void registerUnary(const opcode_t& opcode, ValueType returnType, ValueType arg1, unary_operation functor) { functors[opcode].push_back({ Signature(returnType, arg1), functor, true }); }
     void registerNullary(const opcode_t& opcode, ValueType returnType, bool isConstant, nullary_operation functor) { functors[opcode].push_back({ Signature(returnType), functor, isConstant }); }
@@ -166,25 +172,46 @@ namespace nanoexpr::vm
     }
   };
 
+  class Engine;
+
   class Environment
   {
   private:
-    const Functions* functions;
-    const Enums* enums;
+    const Engine& _engine;
 
-    ValueType customTypeMapping;
+    std::unordered_map<std::string, TypedValue> _variables;
 
-    std::unordered_map<std::string, TypedValue> variables;
+  protected:
+    Environment(const Engine& engine) : _engine(engine) { }
+
   public:
-    Environment(const Functions* functions, const Enums* enums) : functions(functions), enums(enums), customTypeMapping(ValueType::FIRST_CUSTOM_TYPE) { }
+    void set(const std::string& ident, TypedValue value) { _variables.emplace(std::make_pair(ident, value)); }
+    const TypedValue* get(const std::string& identifier) const { auto it = _variables.find(identifier); return it != _variables.end() ? &it->second : nullptr; }
 
-    template<typename T> ValueType mapCustomType() { ValueType current = customTypeMapping; customTypeMapping = (ValueType)((std::underlying_type_t<ValueType>)customTypeMapping+1); return current;  }
+    const Engine& engine() const { return _engine; }
 
-    const FunctionDefinition* findFunction(const opcode_t& opcode, ValueType t1, ValueType t2 = ValueType::NONE, ValueType t3 = ValueType::NONE) const { return functions->find(opcode, t1, t2, t3); }
-    auto findEnum(const std::string& name, const std::string& value) const { return enums->findEnum(name, value); }
+    friend class Engine;
+  };
 
-    void set(const std::string& ident, TypedValue value) { variables.emplace(std::make_pair(ident, value)); }
-    const TypedValue* get(const std::string& identifier) const { auto it = variables.find(identifier); return it != variables.end() ? &it->second : nullptr; }
+  class Engine
+  {
+  private:
+    Functions _functions;
+    Enums _enums;
+    ValueType _customTypeMapping;
+
+  public:
+    Engine() : _customTypeMapping(ValueType::FIRST_CUSTOM_TYPE) { }
+
+    const FunctionDefinition* findFunction(const opcode_t& opcode, ValueType t1, ValueType t2 = ValueType::NONE, ValueType t3 = ValueType::NONE) const { return _functions.find(opcode, t1, t2, t3); }
+    auto findEnum(const std::string& name, const std::string& value) const { return _enums.findEnum(name, value); }
+
+    Enums& enums() { return _enums; }
+    Functions& functions() { return _functions; }
+
+    template<typename T> ValueType mapCustomType() { ValueType current = _customTypeMapping; _customTypeMapping = (ValueType)((std::underlying_type_t<ValueType>)_customTypeMapping + 1); return current; }
+
+    Environment createEnvironment() { return Environment(*this); }
   };
 }
 
@@ -230,6 +257,7 @@ void nanoexpr::vm::Functions::init()
   registerBinary("min", VT::REAL, VT::REAL, VT::REAL, [](V v1, V v2) { return std::min(v1.r(), v2.r()); });
   registerBinary("max", VT::INTEGRAL, VT::INTEGRAL, VT::INTEGRAL, [](V v1, V v2) { return std::max(v1.i(), v2.i()); });
   registerBinary("max", VT::REAL, VT::REAL, VT::REAL, [](V v1, V v2) { return std::max(v1.r(), v2.r()); });
+  registerTernary("clamp", VT::REAL, VT::REAL, VT::REAL, VT::REAL, true, [](V min, V v2, V max) { return v2.r() < min.r() ? min.r() : (v2.r() > max.r() ? max : v2.r()); });
 
   registerNullary("rand", VT::INTEGRAL, false, [] { return Value(rand() % RAND_MAX); });
   registerFreeUnaryFunction<real_t, real_t, std::abs>("abs", VT::REAL, VT::REAL);

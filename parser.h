@@ -103,7 +103,7 @@ namespace nanoexpr
 
       CompileResult compile(const vm::Environment* env) const override
       {
-        auto value = env->findEnum(_enumName, _enumValue);
+        auto value = env->engine().findEnum(_enumName, _enumValue);
 
         if (value.first)
           return CompileResult(ValueType::INTEGRAL, [value = value.second]() { return value; });
@@ -151,7 +151,7 @@ namespace nanoexpr
           while (retry)
           {
 
-            auto definition = env->findFunction(_identifier, types[0], types[1], types[2]);
+            auto definition = env->engine().findFunction(_identifier, types[0], types[1], types[2]);
 
             if (definition != nullptr)
             {
@@ -163,7 +163,7 @@ namespace nanoexpr
                 case 0: result = CompileResult(definition->signature.returnType, [function = functor.nullary]() { return function(); }); break;
                 case 1: result = CompileResult(definition->signature.returnType, [function = functor.unary, first = args[0].lambda]() { return function(first()); }); break;
                 case 2: result = CompileResult(definition->signature.returnType, [function = functor.binary, first = args[0].lambda, second = args[1].lambda]() { return function(first(), second()); }); break;
-                  //TODO: ternary
+                case 3: result = CompileResult(definition->signature.returnType, [function = functor.ternary, first = args[0].lambda, second = args[1].lambda, third = args[2].lambda]() { return function(first(), second(), third()); }); break;
               }
 
               if (config::OptimizationConstantFolding && std::all_of(_args.begin(), _args.end(), [env](const auto& arg) { return arg->isConstant(env); }) && definition->isConstant)

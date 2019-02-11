@@ -35,7 +35,7 @@ int main()
   //getchar();
   //return 0;
   
-  auto input = "foo.getX()";
+  auto input = "clamp(0, -1.2, 1)";
   bool execute = true;
 
   nanoexpr::lex::Lexer lexer;
@@ -51,19 +51,18 @@ int main()
     nanoexpr::parser::Parser parser;
     auto parseResult =  parser.parse(lexResult.tokens);
 
-    vm::Functions* functions = new vm::Functions();
-    vm::Enums* enums = new vm::Enums();
+    vm::Engine engine;
 
     enum class FooEnum { FIELD = 5, OTHER_FIELD = 100};
-    enums->registerEnum<FooEnum>("FooEnum", { {"FIELD", FooEnum::FIELD }, {"OTHER_FIELD", FooEnum::OTHER_FIELD } });
+    engine.enums().registerEnum<FooEnum>("FooEnum", { {"FIELD", FooEnum::FIELD }, {"OTHER_FIELD", FooEnum::OTHER_FIELD } });
+    ValueType fooType = engine.mapCustomType<Foo>();
 
-    vm::Environment env(functions, enums);
+    vm::Environment env = engine.createEnvironment();
 
-    ValueType fooType = env.mapCustomType<Foo>();
     Foo foo = { 5, 10 };
     env.set("foo", TypedValue(&foo, fooType));
 
-    functions->registerUnary("getX", ValueType::INTEGRAL, fooType, [](Value v) { return v.as<const Foo*>()->x; });
+    engine.functions().registerUnary("getX", ValueType::INTEGRAL, fooType, [](Value v) { return v.as<const Foo*>()->x; });
 
     //functions->registerUnregisary("getFoo", )
 

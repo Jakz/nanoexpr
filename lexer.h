@@ -199,10 +199,9 @@ namespace nanoexpr::lex
         {
           if (Rule::hasSpaceOrNonDigitTermination(input, p))
           {
-            --p;
             finished = true;
+            break;
           }
-          break;
         }
 
         ++p;
