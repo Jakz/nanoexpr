@@ -80,8 +80,8 @@ namespace nanoexpr::vm
 
     template<bool Cmp, template<typename TT> typename F> void registerNumericBinary(const vm::opcode_t& opcode)
     {
-      registerBinary(opcode, Signature(Cmp ? ValueType::BOOL : ValueType::INTEGRAL, ValueType::INTEGRAL, ValueType::INTEGRAL), [](Value v1, Value v2) { return Value(F<integral_t>()(v1.i(), v2.i())); });
-      registerBinary(opcode, Signature(Cmp ? ValueType::BOOL : ValueType::REAL, ValueType::REAL, ValueType::REAL), [](Value v1, Value v2) { return Value(F<real_t>()(v1.r(), v2.r())); });
+      registerBinary(opcode, Cmp ? ValueType::BOOL : ValueType::INTEGRAL, ValueType::INTEGRAL, ValueType::INTEGRAL, [](Value v1, Value v2) { return Value(F<integral_t>()(v1.i(), v2.i())); });
+      registerBinary(opcode, Cmp ? ValueType::BOOL : ValueType::REAL, ValueType::REAL, ValueType::REAL, [](Value v1, Value v2) { return Value(F<real_t>()(v1.r(), v2.r())); });
     }
 
     template<bool Cmp, template<typename TT> typename F> void registerNumericUnary(const vm::opcode_t& opcode)
@@ -91,7 +91,7 @@ namespace nanoexpr::vm
     }
 
   public:
-    void registerBinary(const opcode_t& opcode, Signature signature, binary_operation functor) { functors[opcode].push_back({ signature, functor, true }); }
+    void registerBinary(const opcode_t& opcode, ValueType returnType, ValueType arg1, ValueType arg2, binary_operation functor) { functors[opcode].push_back({ Signature(returnType, arg1, arg2), functor, true }); }
     void registerUnary(const opcode_t& opcode, ValueType returnType, ValueType arg1, unary_operation functor) { functors[opcode].push_back({ Signature(returnType, arg1), functor, true }); }
     void registerNullary(const opcode_t& opcode, ValueType returnType, bool isConstant, nullary_operation functor) { functors[opcode].push_back({ Signature(returnType), functor, isConstant }); }
 
@@ -105,7 +105,7 @@ namespace nanoexpr::vm
     /* TODO: could deduce signature from R and T */
     template<typename T, typename R, typename U, R(*func)(T, U)> void registerFreeBinaryFunction(const vm::opcode_t& opcode, ValueType returnType, ValueType arg1, ValueType arg2)
     {
-      registerBinary(opcode, Signature(returnType, arg1, arg2), [](Value v1, Value v2) { return Value(func(v1.as<T>(), v2.as<T>())); });
+      registerBinary(opcode, returnType, arg1, arg2, [](Value v1, Value v2) { return Value(func(v1.as<T>(), v2.as<T>())); });
     }
 
   public:
@@ -200,13 +200,13 @@ void nanoexpr::vm::Functions::init()
   registerNumericBinary<false, std::minus>("-");
   registerNumericBinary<false, std::multiplies>("*");
   registerNumericBinary<false, std::divides>("/");
-  registerBinary("%", vm::Signature(VT::INTEGRAL, VT::INTEGRAL, VT::INTEGRAL), [](V v1, V v2) { return std::modulus<integral_t>()(v1.i(), v2.i()); });
+  registerBinary("%", VT::INTEGRAL, VT::INTEGRAL, VT::INTEGRAL, [](V v1, V v2) { return std::modulus<integral_t>()(v1.i(), v2.i()); });
   registerNumericUnary<false, std::negate>("-");
 
   /* bitwise */
   registerUnary("~", VT::INTEGRAL, VT::INTEGRAL, [](V v) { return std::bit_not<integral_t>()(v.i()); });
-  registerBinary("&", vm::Signature(VT::INTEGRAL, VT::INTEGRAL, VT::INTEGRAL), [](V v1, V v2) { return std::bit_and<integral_t>()(v1.b(), v2.b()); });
-  registerBinary("|", vm::Signature(VT::INTEGRAL, VT::INTEGRAL, VT::INTEGRAL), [](V v1, V v2) { return std::bit_or<integral_t>()(v1.b(), v2.b()); });
+  registerBinary("&", VT::INTEGRAL, VT::INTEGRAL, VT::INTEGRAL, [](V v1, V v2) { return std::bit_and<integral_t>()(v1.b(), v2.b()); });
+  registerBinary("|", VT::INTEGRAL, VT::INTEGRAL, VT::INTEGRAL, [](V v1, V v2) { return std::bit_or<integral_t>()(v1.b(), v2.b()); });
 
   /* equality */
   registerNumericBinary<true, std::equal_to>("==");
@@ -219,17 +219,17 @@ void nanoexpr::vm::Functions::init()
   registerNumericBinary<true, std::greater_equal>("<=");
 
   /* logical operators */
-  registerBinary("&&", vm::Signature(VT::BOOL, VT::BOOL, VT::BOOL), [](V v1, V v2) { return std::logical_and<bool>()(v1.b(), v2.b()); });
-  registerBinary("||", vm::Signature(VT::BOOL, VT::BOOL, VT::BOOL), [](V v1, V v2) { return std::logical_or<bool>()(v1.b(), v2.b()); });
-  registerBinary("==", vm::Signature(VT::BOOL, VT::BOOL, VT::BOOL), [](V v1, V v2) { return std::equal_to<bool>()(v1.b(), v2.b()); });
-  registerBinary("!=", vm::Signature(VT::BOOL, VT::BOOL, VT::BOOL), [](V v1, V v2) { return std::not_equal_to<bool>()(v1.b(), v2.b()); });
+  registerBinary("&&", VT::BOOL, VT::BOOL, VT::BOOL, [](V v1, V v2) { return std::logical_and<bool>()(v1.b(), v2.b()); });
+  registerBinary("||", VT::BOOL, VT::BOOL, VT::BOOL, [](V v1, V v2) { return std::logical_or<bool>()(v1.b(), v2.b()); });
+  registerBinary("==", VT::BOOL, VT::BOOL, VT::BOOL, [](V v1, V v2) { return std::equal_to<bool>()(v1.b(), v2.b()); });
+  registerBinary("!=", VT::BOOL, VT::BOOL, VT::BOOL, [](V v1, V v2) { return std::not_equal_to<bool>()(v1.b(), v2.b()); });
   registerUnary("!", VT::BOOL, VT::BOOL, [](V v) { return std::logical_not<bool>()(v.b()); });
 
   /* builtins */
-  registerBinary("min", { VT::INTEGRAL, VT::INTEGRAL, VT::INTEGRAL }, [](V v1, V v2) { return std::min(v1.i(), v2.i()); });
-  registerBinary("min", { VT::REAL, VT::REAL, VT::REAL }, [](V v1, V v2) { return std::min(v1.r(), v2.r()); });
-  registerBinary("max", { VT::INTEGRAL, VT::INTEGRAL, VT::INTEGRAL }, [](V v1, V v2) { return std::max(v1.i(), v2.i()); });
-  registerBinary("max", { VT::REAL, VT::REAL, VT::REAL }, [](V v1, V v2) { return std::max(v1.r(), v2.r()); });
+  registerBinary("min", VT::INTEGRAL, VT::INTEGRAL, VT::INTEGRAL, [](V v1, V v2) { return std::min(v1.i(), v2.i()); });
+  registerBinary("min", VT::REAL, VT::REAL, VT::REAL, [](V v1, V v2) { return std::min(v1.r(), v2.r()); });
+  registerBinary("max", VT::INTEGRAL, VT::INTEGRAL, VT::INTEGRAL, [](V v1, V v2) { return std::max(v1.i(), v2.i()); });
+  registerBinary("max", VT::REAL, VT::REAL, VT::REAL, [](V v1, V v2) { return std::max(v1.r(), v2.r()); });
 
   registerNullary("rand", VT::INTEGRAL, false, [] { return Value(rand() % RAND_MAX); });
   registerFreeUnaryFunction<real_t, real_t, std::abs>("abs", VT::REAL, VT::REAL);
