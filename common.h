@@ -44,45 +44,35 @@ namespace nanoexpr
     std::string data;
   };
 
-  template<ValueType T> struct value_traits { };
-  template<> struct value_traits<ValueType::REAL> { using type = real_t; };
-  template<> struct value_traits<ValueType::INTEGRAL> { using type = integral_t; };
-  template<> struct value_traits<ValueType::BOOL> { using type = bool; };
-  template<> struct value_traits<ValueType::STRING> { using type = const string_ref*; };
-  template<> struct value_traits<ValueType::POINTER> { using type = void*; };
-
-
   union Value
   {
     real_t real;
     integral_t integral;
-    const string_ref* string;
     bool boolean;
-    void* ptr;
+    const void* ptr;
 
     Value(integral_t integral) : integral(integral) { }
     Value(real_t real) : real(real) { }
     Value(bool boolean) : boolean(boolean) { }
-    Value(const string_ref* string) : string(string) { }
+    Value(const string_ref* string) : ptr(string) { }
 
     template<typename T> Value(T* ptr) : ptr(ptr) { }
 
     inline integral_t i() const { return integral; }
     inline real_t r() const { return real; }
     inline bool b() const { return boolean; }
-    inline const string_ref* str() const { return string; }
+    inline const string_ref* str() const { return as<const string_ref*>(); }
     template<typename T> inline T* p() const { return static_cast<T*>(ptr); }
 
-    template<typename T, typename std::enable_if<!std::is_enum<T>::value, int>::type* = nullptr> T as() const;
-    template<typename T, typename std::enable_if<std::is_enum<T>::value, int>::type* = nullptr> inline T as() const { return static_cast<T>(as<integral_t>()); }
-
-    template<ValueType T> typename value_traits<T>::type as() { return as<typename value_traits<T>::type>(); }
+    template<typename T, typename std::enable_if_t<!std::is_enum_v<T> && !std::is_pointer_v<T>>* = nullptr> T as() const;
+    template<typename T, typename std::enable_if_t<std::is_enum_v<T>>* = nullptr> inline T as() const { return static_cast<T>(as<integral_t>()); }
+    template<typename T, typename std::enable_if_t<std::is_pointer_v<T>>* = nullptr> inline T as() const { return static_cast<T>(ptr); }
   };
 
   template<> real_t Value::as() const { return real; }
   template<> integral_t Value::as() const { return integral; }
   template<> bool Value::as() const { return real; }
-  template<> const string_ref* Value::as() const { return string; }
+
 
   struct TypedValue
   {
@@ -93,5 +83,7 @@ namespace nanoexpr
     TypedValue(integral_t real) : value(real), type(ValueType::INTEGRAL) { }
     TypedValue(bool real) : value(real), type(ValueType::BOOL) { }
     TypedValue(const string_ref* string) : value(string), type(ValueType::STRING) { }
+
+    template<typename T, std::enable_if_t<std::is_pointer_v<T>>* = nullptr> TypedValue(T ptr, ValueType type) : value(ptr), type(type) { }
   };
 }

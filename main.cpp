@@ -35,7 +35,7 @@ int main()
   //getchar();
   //return 0;
   
-  auto input = "rand()";
+  auto input = "getX(foo)";
   bool execute = true;
 
   nanoexpr::lex::Lexer lexer;
@@ -61,6 +61,10 @@ int main()
     vm::Environment env(functions, enums);
 
     ValueType fooType = env.mapCustomType<Foo>();
+    Foo foo = { 5, 10 };
+    env.set("foo", TypedValue(&foo, fooType));
+
+    functions->registerUnary("getX", ValueType::INTEGRAL, fooType, [](Value v) { return v.as<const Foo*>()->x; });
 
     //functions->registerUnregisary("getFoo", )
 
@@ -73,7 +77,7 @@ int main()
 
       if (compileResult)
       {
-        for (size_t r = 0; r < 2; ++r)
+        for (size_t r = 0; r < 1; ++r)
         {
           Value v = compileResult.lambda();
 
