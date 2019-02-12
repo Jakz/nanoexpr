@@ -51,6 +51,8 @@ namespace nanoexpr
     bool boolean;
     const void* ptr;
 
+    uint64_t data__;
+
     Value(integral_t integral) : integral(integral) { }
     Value(real_t real) : real(real) { }
     Value(bool boolean) : boolean(boolean) { }
@@ -83,6 +85,10 @@ namespace nanoexpr
     TypedValue(integral_t real) : value(real), type(ValueType::INTEGRAL) { }
     TypedValue(bool real) : value(real), type(ValueType::BOOL) { }
     TypedValue(const string_ref* string) : value(string), type(ValueType::STRING) { }
+    TypedValue(ValueType type, Value value) : value(value), type(type) { }
+
+    //TODO: unsure if this is defined since some bytes of data__ could not be initialized
+    bool operator==(const TypedValue& tv) const { return type == tv.type && value.data__ == tv.value.data__; }
 
     template<typename T, std::enable_if_t<std::is_pointer_v<T>>* = nullptr> TypedValue(T ptr, ValueType type) : value(ptr), type(type) { }
   };

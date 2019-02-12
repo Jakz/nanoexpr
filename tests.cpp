@@ -115,6 +115,20 @@ void lexerShouldFail(const std::initializer_list<std::string>& inputs)
     REQUIRE_FALSE(tokenize(input).success);
 }
 
+void compileAndCheck(const std::vector<std::string>& input, const std::vector<TypedValue>& v)
+{
+  REQUIRE(input.size() == v.size());
+
+  for (size_t i = 0; i < input.size(); ++i)
+  {
+    auto result = compile(parse(tokenize(input[i])));
+    TypedValue r = TypedValue(result.type, result.lambda());
+    REQUIRE(v[i] == r);
+  }
+  
+
+}
+
 using TT = lex::TokenType;
 
 TEST_CASE("lexer") 
@@ -213,6 +227,27 @@ TEST_CASE("lexer")
     tokenizeAndCheck("'foobar'", { { TT::STRING, "foobar" } });
     tokenizeAndCheck("''", { {TT::STRING, ""} });
     lexerShouldFail({ "'foob" });
+  }
+}
+
+TEST_CASE("parsing")
+{
+  SECTION("associativity")
+  {
+    SECTION("multiplication and division are left-to-right associative")
+    {
+      compileAndCheck({ "10 / 2 * 5" }, { 25 }); // (10 / 2) * 5
+      compileAndCheck({ "16 / 2 / 2" }, { 4 }); // (16 / 2) / 2
+    }
+  }
+
+  SECTION("precedence")
+  {
+    SECTION("multiplication has higher precedence than addition")
+    {
+      compileAndCheck({ "2 + 3 * 4", "2 - 3 * 4" }, { 14, -10 });
+      compileAndCheck({ "-24 / 4 + 3" }, { -3 });
+    }
   }
 }
 
