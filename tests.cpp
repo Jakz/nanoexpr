@@ -38,13 +38,12 @@ std::ostream& operator<<(std::ostream& out, const TypedValue& value)
 
 #pragma mark Utility functions
 
-static const vm::Functions* functions = new vm::Functions();
-static const vm::Enums* enums = new vm::Enums();
-static const vm::Environment* env = new vm::Environment(functions, enums);
+static const vm::Engine engine;
+static const vm::Environment env = engine.createEnvironment();
 
 lex::LexerResult tokenize(const std::string& input) { return lex::Lexer().parse(input); }
 parser::ParserResult parse(lex::LexerResult result) { return parser::Parser().parse(result.tokens); }
-ast::CompileResult compile(parser::ParserResult result) { return result.ast->compile(env); }
+ast::CompileResult compile(parser::ParserResult result) { return result.ast->compile(&env); }
 
 
 
@@ -119,7 +118,7 @@ void lexerShouldFail(const std::initializer_list<std::string>& inputs)
 using TT = lex::TokenType;
 
 TEST_CASE("lexer") 
-{
+{  
   SECTION("integral literals")
   {
     tokenizeAndCheck("0 1 12 512", { 0, 1, 12, 512 });
@@ -160,7 +159,7 @@ TEST_CASE("lexer")
 
       SECTION("operators are allowed directly after hex literal")
       {
-        tokenizeAndCheck("0x1+", { 1,{ TT::OPERATOR, "+" } });
+        tokenizeAndCheck("0x1+", { 1, { TT::OPERATOR, "+" } });
       }
     }
 
@@ -182,8 +181,18 @@ TEST_CASE("lexer")
 
       SECTION("operators are allowed directly after binary literal")
       {
-        tokenizeAndCheck("0b10101-", { 0b10101,{ TT::OPERATOR, "-" } });
+        tokenizeAndCheck("0b10101-", { 0b10101, { TT::OPERATOR, "-" } });
       }
+    }
+  }
+
+  SECTION("floating literals")
+  {
+    tokenizeAndCheck("0.0 0.00 00.0 00.00 000.000", { 0.0f, 0.0f, 0.0f, 0.0f, 0.0f });
+
+    SECTION("partial floats should be correctly parsed")
+    {
+      tokenizeAndCheck("0. 1. .0 .01", { 0.0f, 1.0f, 0.0f, 0.01f });
     }
   }
 

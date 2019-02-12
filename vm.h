@@ -217,7 +217,7 @@ namespace nanoexpr::vm
 
     template<typename T> ValueType mapCustomType() { ValueType current = _customTypeMapping; _customTypeMapping = (ValueType)((std::underlying_type_t<ValueType>)_customTypeMapping + 1); return current; }
 
-    Environment createEnvironment() { return Environment(*this); }
+    Environment createEnvironment() const { return Environment(*this); }
   };
 
   const TypedValue* Environment::get(const std::string& identifier) const {

@@ -176,38 +176,46 @@ namespace nanoexpr::lex
   public:
     Token matches(const std::string_view input) const override
     {
-      size_t s = 0, p = 0;
+      enum class state { SIGN, BEFORE_DOT, BEFORE_DOT_NO_DIGIT, DIGIT_AFTER_DOT, AFTER_DOT, AFTER_DOT_NO_DIGIT };
+      state s = state::SIGN;
+      size_t p = 0;
+
       bool finished = false, failed = false;
 
       while (p < input.length() && !finished)
       {
         auto c = input[p];
 
-        if (s == 0)
+        switch (s)
         {
-          if (c == '-' || c == '+') ++s;
-          else if (std::isdigit(c)) { ++s; --p; }
-          else { failed = true; finished = true; }
-        }
-        else if (s == 1)
-        {
-          if (std::isdigit(c));
-          else if (c == '.') { ++s; }
-          else { failed = true; finished = true; }
-        }
-        else if (s == 2)
-        {
-          if (Rule::hasSpaceOrNonDigitTermination(input, p))
-          {
-            finished = true;
+          case state::SIGN:
+            if (c == '-' || c == '+') s = state::BEFORE_DOT_NO_DIGIT;
+            else if (std::isdigit(c)) { s = state::BEFORE_DOT; --p; }
+            else if (c == '.') { s = state::BEFORE_DOT_NO_DIGIT; --p; }
+            else { failed = true; finished = true; }
             break;
-          }
+          case state::BEFORE_DOT_NO_DIGIT:
+          case state::BEFORE_DOT:
+            if (std::isdigit(c)) { s = state::BEFORE_DOT; }
+            else if (c == '.') { s = s == state::BEFORE_DOT_NO_DIGIT ? state::AFTER_DOT_NO_DIGIT : state::AFTER_DOT; }
+            else { failed = true; finished = true; }
+            break;
+          case state::AFTER_DOT_NO_DIGIT:
+            if (std::isdigit(c)) s = state::AFTER_DOT;
+            else { failed = true; finished = true; }
+            break;
+          case state::AFTER_DOT:
+            if (Rule::hasSpaceOrNonDigitTermination(input, p))
+            {
+              finished = true;
+              break;
+            }
         }
 
         ++p;
       }
 
-      if (!failed && s == 2)
+      if (!failed && s == state::AFTER_DOT)
       {
         std::string copy = std::string(input.substr(0, p));
         return Token(TokenType::FLOAT, copy, std::stof(copy));
