@@ -71,24 +71,28 @@ namespace nanoexpr
     {
     private:
       std::string _identifier;
+      mutable bool _isConstant;
 
     public:
-      Identifier(const std::string& identifier) : _identifier(identifier) { }
-      bool isConstant(const vm::Environment* env) const override { return true; } //TODO: should fetch value from env and decide
+      Identifier(const std::string& identifier) : _identifier(identifier), _isConstant(false) { }
+      bool isConstant(const vm::Environment* env) const override { return _isConstant; } //TODO: should fetch value from env and decide
 
 
       CompileResult compile(const vm::Environment* env) const override
       {
         //TODO: here we assume that identifier is already defined in symbol table, is that correct?
-        const TypedValue* value = env->get(_identifier);
+        const vm::Environment::variable_t* variable = env->get(_identifier);
 
-        if (value)
-          return CompileResult(value->type, [value = value->value]() { return value; });
+        if (variable)
+        {
+          _isConstant = variable->second;
+          return CompileResult(variable->first.type, [value = variable->first.value]() { return value; });
+        }
         else
           return CompileResult("identifier not defined '" + _identifier + "'");
       }
 
-      std::string textual(size_t indent = 0) const override { return std::string(indent, ' ') + "identifier(" + _identifier + ")\n"; }
+      std::string textual(size_t indent = 0) const override { return std::string(indent, ' ') + "identifier(" + _identifier + ", "+(_isConstant?"constant":"non-constant")+")\n"; }
     };
 
     class EnumValue : public Expression
@@ -120,14 +124,16 @@ namespace nanoexpr
     private:
       vm::opcode_t _identifier;
       std::vector<std::unique_ptr<Expression>> _args;
-
+      mutable bool _isConstant;
+      
     public:
-      FunctionCall(const vm::opcode_t& identifier, const std::vector<Expression*>& args) : _identifier(identifier)
+      FunctionCall(const vm::opcode_t& identifier, const std::vector<Expression*>& args) : _identifier(identifier), _isConstant(false)
       {
         for (Expression* arg : args)
           _args.emplace_back(arg);
       }
-      bool isConstant(const vm::Environment* env) const override { return true; } // TODO env.functions->find()->isConstant
+      
+      bool isConstant(const vm::Environment* env) const override { return _isConstant; } // TODO env.functions->find()->isConstant
 
       CompileResult compile(const vm::Environment* env) const override
       {
@@ -150,24 +156,55 @@ namespace nanoexpr
 
           while (retry)
           {
-
             auto definition = env->engine().findFunction(_identifier, types[0], types[1], types[2]);
-
+            
             if (definition != nullptr)
             {
               const auto& functor = definition->function;
               CompileResult result;
+              
+              bool anyConstant = false, allConstant = true;
+              std::for_each(_args.begin(), _args.end(), [&anyConstant, &allConstant, env] (const auto& arg)
+                            { anyConstant |= arg->isConstant(env); allConstant &= arg->isConstant(env); });
+              
+              const bool optimizeArgs = true && config::OptimizationConstantFolding && (!definition->isConstant || !allConstant);
+              const bool optimizeCall = allConstant && config::OptimizationConstantFolding && definition->isConstant;
 
               switch (_args.size())
               {
                 case 0: result = CompileResult(definition->signature.returnType, [function = functor.nullary]() { return function(); }); break;
-                case 1: result = CompileResult(definition->signature.returnType, [function = functor.unary, first = args[0].lambda]() { return function(first()); }); break;
-                case 2: result = CompileResult(definition->signature.returnType, [function = functor.binary, first = args[0].lambda, second = args[1].lambda]() { return function(first(), second()); }); break;
+                case 1:
+                {
+                  if (optimizeArgs && _args[0]->isConstant(env))
+                    result = CompileResult(definition->signature.returnType, [function = functor.unary, first = args[0].lambda()]() { return function(first); });
+                  else
+                    result = CompileResult(definition->signature.returnType, [function = functor.unary, first = args[0].lambda]() { return function(first()); });
+                  break;
+                }
+                case 2:
+                  if (optimizeArgs && _args[0]->isConstant(env))
+                  {
+                    //std::cout << "Optimizing call to " << _identifier << " (arg0)" << std::endl;
+                    result = CompileResult(definition->signature.returnType, [function = functor.binary, first = args[0].lambda(), second = args[1].lambda]() { return function(first, second()); });
+                  }
+                  else if (optimizeArgs && _args[1]->isConstant(env))
+                  {
+                    //std::cout << "Optimizing call to " << _identifier << " (arg1)" << std::endl;
+                    result = CompileResult(definition->signature.returnType, [function = functor.binary, first = args[0].lambda, second = args[1].lambda()]() { return function(first(), second); });
+                  }
+                  else
+                  {
+                    result = CompileResult(definition->signature.returnType, [function = functor.binary, first = args[0].lambda, second = args[1].lambda]() { return function(first(), second()); });
+                  }
+                  break;
+
                 case 3: result = CompileResult(definition->signature.returnType, [function = functor.ternary, first = args[0].lambda, second = args[1].lambda, third = args[2].lambda]() { return function(first(), second(), third()); }); break;
               }
 
-              if (config::OptimizationConstantFolding && std::all_of(_args.begin(), _args.end(), [env](const auto& arg) { return arg->isConstant(env); }) && definition->isConstant)
+              if (optimizeCall)
               {
+                _isConstant = true;
+                //std::cout << "Optimizing call to " << _identifier << std::endl;
                 Value value = result.lambda();
                 result.lambda = [value = value] { return value; };
               }

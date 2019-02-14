@@ -178,17 +178,20 @@ namespace nanoexpr::vm
 
   class Environment
   {
+  public:
+    using variable_t = std::pair<TypedValue, bool>;
+    
   private:
     const Engine& _engine;
 
-    std::unordered_map<std::string, TypedValue> _variables;
+    std::unordered_map<std::string, variable_t> _variables;
 
   protected:
     Environment(const Engine& engine) : _engine(engine) { }
 
   public:
-    void set(const std::string& ident, TypedValue value) { _variables.emplace(std::make_pair(ident, value)); }
-    const TypedValue* get(const std::string& identifier) const;
+    void set(const std::string& ident, TypedValue value, bool constant = false) { _variables.emplace(std::make_pair(ident, std::make_pair(value, constant))); }
+    const Environment::variable_t* get(const std::string& identifier) const;
  
     const Engine& engine() const { return _engine; }
 
@@ -201,7 +204,7 @@ namespace nanoexpr::vm
     Functions _functions;
     Enums _enums;
     ValueType _customTypeMapping;
-    std::unordered_map<std::string, TypedValue> _globals;
+    std::unordered_map<std::string, Environment::variable_t> _globals;
 
   public:
     Engine() : _customTypeMapping(ValueType::FIRST_CUSTOM_TYPE) { }
@@ -212,15 +215,15 @@ namespace nanoexpr::vm
     Enums& enums() { return _enums; }
     Functions& functions() { return _functions; }
 
-    template<typename T> void setGlobal(const std::string& identifier, T value) { _globals.emplace(std::make_pair(identitifer, value)); }
-    const TypedValue* getGlobal(const std::string& identifier) const { auto it = _globals.find(identifier); return it != _globals.end() ? &it->second : nullptr; }
+    template<typename T> void setGlobal(const std::string& identifier, T value, bool constant = false) { _globals.emplace(std::make_pair(identifier, std::make_pair(value, constant))); }
+    const Environment::variable_t* getGlobal(const std::string& identifier) const { auto it = _globals.find(identifier); return it != _globals.end() ? &it->second : nullptr; }
 
     template<typename T> ValueType mapCustomType() { ValueType current = _customTypeMapping; _customTypeMapping = (ValueType)((std::underlying_type_t<ValueType>)_customTypeMapping + 1); return current; }
 
     Environment createEnvironment() const { return Environment(*this); }
   };
 
-  const TypedValue* Environment::get(const std::string& identifier) const {
+  const Environment::variable_t* Environment::get(const std::string& identifier) const {
     auto it = _variables.find(identifier);
     if (it != _variables.end())
       return &it->second;
