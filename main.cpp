@@ -164,3 +164,16 @@ void benchmark(const std::string& script, std::function<float(float)> native, fl
   std::cout << "ratio is " << (int)(100* nano_cast(elapsed[0]).count() / nano_cast(elapsed[1]).count()) << "%" << std::endl;
   std::cout << results[0] << " ~= " << results[1] << std::endl;
 }
+
+/*
+
+Your code is meant to print the set according to a sorting comparator. In case of `std::less` you specified an operator< but for `std::greater` you need to specify a `operator>` since its implementation invokes it.
+
+Now some suggestions:
+
+- use emplace functions when available to enable possible optimizations, eg. `setP2.emplace(1,3)`
+- a loop like yours inside printSet is verbose and can be changed with a call to `std::copy`.
+- since std::less is the default Compare for std::set you don't need to build another one when `std::is_same<U, std::less<Point2D>>` holds
+- for negated comparators (like `std::greater` when set Compare is `std::less`) you can use `rbegin` and `rend` to iterate in the opposite direction
+
+*/

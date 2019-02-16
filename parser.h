@@ -352,7 +352,7 @@ namespace nanoexpr
             {
               /* we expect another identifier*/
               if (!match(TokenType::IDENTIFIER))
-                return fail("epxected identifier after member call with '.'");
+                return fail("expected identifier after member call with '.'");
               else
               {
                 std::string functionName = previous()->textual();
@@ -367,6 +367,8 @@ namespace nanoexpr
               }
 
             }
+
+            /* school(researching_spell(book(wizard))) */
 
             /* comma separated expressions as arguments */
 
