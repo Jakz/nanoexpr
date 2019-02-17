@@ -37,7 +37,7 @@ int main()
   //getchar();
   //return 0;
   
-  auto input = "foo.123"; // "getFoo().getX.max(15)";
+  auto input = "foo(123,)"; // "getFoo().getX.max(15)";
   bool execute = true;
 
   nanoexpr::lex::Lexer lexer;

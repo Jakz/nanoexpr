@@ -393,6 +393,7 @@ namespace nanoexpr
           ast::Expression* call = nullptr;
 
           std::string name = previous()->textual();
+          //TODO: leak of arguments on failure
           std::vector<ast::Expression*> arguments;
 
           while (match(TokenType::SYMBOL, { "(", "." }))
@@ -422,21 +423,26 @@ namespace nanoexpr
             }
             else if (previous()->match(TokenType::SYMBOL, "("))
             {
-              bool done = false;
-              
-              while (!done)
+              enum class state { AWAITING_COMMA, AFTER_COMMA, EXPRESSION } s = state::EXPRESSION;
+
+              while (true)
               {
-                if (finished())
-                  return fail("unexpected EOF while parsing function argument list");
-                else if (match(TokenType::SYMBOL, { ")" }))
+                if (finished()) return fail("unexpected EOF while parsing function argument list");
+
+                if (match(TokenType::SYMBOL, { ")" }))
                 {
+                  if (s == state::AFTER_COMMA) return fail("expecting expression after comma");
+                  
                   call = new ast::FunctionCall(name, arguments);
                   arguments.clear();
-                  done = true;
+                  break;
                 }
-                else if (match(TokenType::SYMBOL, { "," }) && !arguments.empty())
-                  ;
-                else
+                else if (match(TokenType::SYMBOL, { "," }))
+                {
+                  if (s != state::AWAITING_COMMA) return fail("unexpected ','");
+                  else s = state::AFTER_COMMA;
+                }
+                else if (s == state::EXPRESSION || s == state::AFTER_COMMA)
                 {
                   ast::Expression* argument = expression();
 
@@ -447,7 +453,10 @@ namespace nanoexpr
                   }
 
                   arguments.push_back(argument);
+                  s = state::AWAITING_COMMA;
                 }
+                else
+                  return fail("error while parsing function call arguments");
               }
             }
           }

@@ -268,7 +268,7 @@ TEST_CASE("parsing")
     {
       parserShouldFail({ "foo.", "foo(" });
       parserShouldFail({ "foo.123", "foo(123" });
-
+      parserShouldFail({ "foo(123,", "foo(123,)", "foo(123,,456)", "foo(,123)" });
     }
   }
 }
