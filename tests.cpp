@@ -44,6 +44,7 @@ lex::LexerResult tokenize(const std::string& input) { return lex::Lexer().parse(
 parser::ParserResult parse(lex::LexerResult result) { return parser::Parser().parse(result.tokens); }
 ast::CompileResult compile(parser::ParserResult result) { return result.ast->compile(&env); }
 
+parser::ParserResult parse(const std::string& input) { return parser::Parser().parse(lex::Lexer().parse(input).tokens); }
 
 
 bool operator==(const lex::Token& token, const TypedValue& v)
@@ -111,7 +112,18 @@ void tokenizeAndCheck(const std::string& input, const std::vector<TokenCheck>& v
 void lexerShouldFail(const std::initializer_list<std::string>& inputs)
 {
   for (const auto& input : inputs)
-    REQUIRE_FALSE(tokenize(input).success);
+    if (tokenize(input).success)
+      FAIL("lexer should fail for input string '" + input + "'");
+}
+
+void parserShouldFail(const std::initializer_list<std::string>& inputs)
+{
+  for (const auto& input : inputs)
+  {
+    auto result = parse(input);
+    if (result.success) 
+      FAIL("parser should fail for input string '" + input + "' but it was\n" + result.ast->textual());
+  }
 }
 
 void compileAndCheck(const std::vector<std::string>& input, const std::vector<TypedValue>& v)
@@ -246,6 +258,17 @@ TEST_CASE("parsing")
     {
       compileAndCheck({ "2 + 3 * 4", "2 - 3 * 4" }, { 14, -10 });
       compileAndCheck({ "-24 / 4 + 3" }, { -3 });
+    }
+  }
+
+
+  SECTION("function calls")
+  {
+    SECTION("unterminated sequences are erroneous")
+    {
+      parserShouldFail({ "foo.", "foo(" });
+      parserShouldFail({ "foo.123", "foo(123" });
+
     }
   }
 }

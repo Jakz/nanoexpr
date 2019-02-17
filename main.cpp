@@ -34,10 +34,10 @@ int main()
   //benchmark<10000000>("rand() / abs(a*2)", [](float a) { return (rand()%RAND_MAX) / std::abs(a*2); }, 7.89f);
   //benchmark<1000000>("max(abs(a), 15.0f) - 8.0f", [](float a) { return std::max(std::abs(a), 15.0f) - 8.0f; }, 7.89f);
 
-  getchar();
-  return 0;
+  //getchar();
+  //return 0;
   
-  auto input = "getFoo().getX.max(15)";
+  auto input = "foo.123"; // "getFoo().getX.max(15)";
   bool execute = true;
 
   nanoexpr::lex::Lexer lexer;

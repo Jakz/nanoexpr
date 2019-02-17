@@ -37,6 +37,7 @@ namespace nanoexpr
     protected:
 
     public:
+      virtual bool isFailure() const { return false; }
       virtual CompileResult compile(const vm::Environment* env) const = 0;
       virtual std::string textual(size_t indent = 0) const = 0;
       virtual bool isConstant(const vm::Environment* env) const { return false; }
@@ -244,7 +245,6 @@ namespace nanoexpr
           result += arg->textual(indent + 2);
         return result;
       }
-
     };
   }
 
@@ -317,10 +317,20 @@ namespace nanoexpr
       {
         ast::Expression* left = (this->*function)();
 
+        if (left->isFailure())
+          return left;
+
         while (match(type, tokens))
         {
           vm::opcode_t op = previous()->textual();
           ast::Expression* right = (this->*function)();
+
+          if (right->isFailure())
+          {
+            delete left;
+            return right;
+          }
+
           left = new ast::FunctionCall(op, { left, right });
         }
 
@@ -328,6 +338,19 @@ namespace nanoexpr
       }
 
     protected:
+      ast::Expression* root()
+      {
+        ast::Expression* expr = expression();
+
+        if (!finished())
+        {
+          delete expr;
+          return fail("couldn't parse the whole input");
+        }
+
+        return expr;
+      }
+
       ast::Expression* expression() { return condition(); }
 
       /* condition = equality ( [&& ||] condition )* */
@@ -351,8 +374,12 @@ namespace nanoexpr
         if (match(TokenType::OPERATOR, { "!", "~", "-" }))
         {
           const token_value_t& op = previous()->textual();
-          ast::Expression* expr = call();
-          return new ast::FunctionCall(op, { expr });
+          ast::Expression* operand = call();
+          
+          if (operand->isFailure())
+            return operand;
+
+          return new ast::FunctionCall(op, { operand });
         }
 
         return call();
@@ -410,7 +437,17 @@ namespace nanoexpr
                 else if (match(TokenType::SYMBOL, { "," }) && !arguments.empty())
                   ;
                 else
-                  arguments.push_back(expression());
+                {
+                  ast::Expression* argument = expression();
+
+                  if (argument->isFailure())
+                  {
+                    delete call;
+                    return argument;
+                  }
+
+                  arguments.push_back(argument);
+                }
               }
             }
           }
@@ -467,7 +504,25 @@ namespace nanoexpr
         return nullptr;
       }
 
-      ast::Expression* fail(const std::string& message) { return nullptr; }
+    public:
+      class Failure : public ast::Expression
+      {
+      private:
+        std::string _message;
+
+      public:
+        Failure(const std::string& message) : _message(message) { }
+        
+        virtual ast::CompileResult compile(const vm::Environment* env) const { return ast::CompileResult(); }
+        virtual std::string textual(size_t indent = 0) const { return std::string(); }
+
+        bool isFailure() const override { return true; }
+        const std::string& message() { return _message; }
+      };
+
+
+
+      ast::Expression* fail(const std::string& message) { return new Failure(message); }
 
     public:
       explicit Parser() noexcept { }
@@ -476,8 +531,17 @@ namespace nanoexpr
       { 
         this->tokens = tokens;
         this->token = this->tokens.begin();
-        auto* ast = expression();
-        return { std::unique_ptr<ast::Expression>(ast), ast != nullptr, "" };
+        ast::Expression* ast = root();
+        assert(ast);
+        
+        if (ast->isFailure())
+        {
+          ParserResult result = { nullptr, false, static_cast<Failure*>(ast)->message() };
+          delete ast;
+          return result;
+        }
+        else
+          return { std::unique_ptr<ast::Expression>(ast), true, "" };
       }
     };
   }
