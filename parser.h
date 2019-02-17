@@ -270,6 +270,7 @@ namespace nanoexpr
         return true;
       }
 
+      void rewind() { --token; }
       void advance() { ++token; }
       const Token& peek() const { return *token; }
 
@@ -313,8 +314,76 @@ namespace nanoexpr
         if (match(TokenType::OPERATOR, { "!", "~", "-" }))
         {
           const token_value_t& op = previous()->textual();
-          ast::Expression* expr = primary();
+          ast::Expression* expr = call();
           return new ast::FunctionCall(op, { expr });
+        }
+
+        return call();
+      }
+
+      /* call = IDENTIFIER (('.' IDENTIFIER ) | ('(' ( expression ',' )* ')'))+ | unary */
+      ast::Expression* call()
+      {
+        if (match(TokenType::IDENTIFIER))
+        {
+          ast::Expression* call = nullptr;
+
+          std::string name = previous()->textual();
+          std::vector<ast::Expression*> arguments;
+
+          while (match(TokenType::SYMBOL, { "(", "." }))
+          {
+            /* if it's a dot then we expect an identifier which will become the function name */
+            if (previous()->match(TokenType::SYMBOL, "."))
+            {
+              if (!match(TokenType::IDENTIFIER))
+                return fail("expected identifier after member call with '.'");
+              else
+              {
+                /* push old identifier or previous call as first argument and swap function name with this */
+                std::string newName = previous()->textual();
+
+                arguments.push_back(call ? call : new ast::Identifier(name));
+                name = newName;
+
+                /* if no ( is present after second identifier then we allow a call with no () for empty arguments */
+                if (!finished() && peek().match(TokenType::SYMBOL, "("))
+                  continue;
+                else
+                {
+                  call = new ast::FunctionCall(name, arguments);
+                  arguments.clear();
+                }
+              }
+            }
+            else if (previous()->match(TokenType::SYMBOL, "("))
+            {
+              bool done = false;
+              
+              while (!done)
+              {
+                if (finished())
+                  return fail("unexpected EOF while parsing function argument list");
+                else if (match(TokenType::SYMBOL, { ")" }))
+                {
+                  call = new ast::FunctionCall(name, arguments);
+                  arguments.clear();
+                  done = true;
+                }
+                else if (match(TokenType::SYMBOL, { "," }) && !arguments.empty())
+                  ;
+                else
+                  arguments.push_back(expression());
+              }
+            }
+          }
+          
+
+          /* if at least a call has been generated return it, otherwise rewind the identifier and fall back to primary */
+          if (call)
+            return call;
+
+          rewind();
         }
 
         return primary();
@@ -337,55 +406,7 @@ namespace nanoexpr
         }
         else if (match(TokenType::IDENTIFIER))
         {
-          bool hasParen = peek().match(TokenType::SYMBOL, "("), hasDot = peek().match(TokenType::SYMBOL, ".");
-          
-          /* it's a function call */
-          if (!finished() && (hasParen || hasDot))
-          {            
-            std::string identifier = previous()->textual();
-
-            advance();
-            std::vector<ast::Expression*> arguments;
-            bool done = false;
-
-            if (hasDot)
-            {
-              /* we expect another identifier*/
-              if (!match(TokenType::IDENTIFIER))
-                return fail("expected identifier after member call with '.'");
-              else
-              {
-                std::string functionName = previous()->textual();
-
-                if (!peek().match(TokenType::SYMBOL, "("))
-                  return fail("expected argument list after member call");
-
-                /* we swap identifiers since first one was object on which function is called */
-                advance();
-                arguments.push_back(new ast::Identifier(identifier));
-                identifier = std::move(functionName);
-              }
-
-            }
-
-            /* school(researching_spell(book(wizard))) */
-
-            /* comma separated expressions as arguments */
-
-            while (!done)
-            {
-              if (finished())
-                done = true; /*TODO: unexpected eof while parsing function arguments */
-              else if (match(TokenType::SYMBOL, { ")" }))
-                return new ast::FunctionCall(identifier, arguments);
-              else if (match(TokenType::SYMBOL, { "," }) && !arguments.empty())
-                ;
-              else
-                arguments.push_back(expression());
-            }
-          }
-          /* it's an enum reference */
-          else if (!finished() && peek().match(TokenType::SYMBOL, "::"))
+          if (!finished() && peek().match(TokenType::SYMBOL, "::"))
           {
             std::string enumName = previous()->textual();
             advance();

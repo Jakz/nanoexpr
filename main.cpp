@@ -35,7 +35,7 @@ int main()
   //getchar();
   //return 0;
   
-  auto input = "clamp(0, -1.2, 1)";
+  auto input = "getFoo().getX.max(15)";
   bool execute = true;
 
   nanoexpr::lex::Lexer lexer;
@@ -62,6 +62,7 @@ int main()
     Foo foo = { 5, 10 };
     env.set("foo", TypedValue(&foo, fooType));
 
+    engine.functions().registerNullary("getFoo", fooType, false, [&foo]() { return &foo; });
     engine.functions().registerUnary("getX", ValueType::INTEGRAL, fooType, [](Value v) { return v.as<const Foo*>()->x; });
 
     //functions->registerUnregisary("getFoo", )
