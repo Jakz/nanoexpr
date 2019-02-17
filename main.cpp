@@ -29,11 +29,13 @@ struct Foo
 
 int main()
 {
-  //benchmark<100000>("(1.0/(a + 1.0) + 2/(a + 2.0)+ 3.0 / (a + 3.0))", [](float a) { return 1.0f / (a + 1.0f) + 2.0f / (a + 2.0f) + 3.0f / (a + 3.0f); }, 2.21f);
+  //benchmark<1000000>("(1.0 / (a + 1.0) + 2.0 / (a + 2.0) + 3.0 / (a + 3.0))", [](float a) { return 1.0f / (a + 1.0f) + 2.0f / (a + 2.0f) + 3.0f / (a + 3.0f); }, 2.21f);
   //benchmark<100000>("1.0 + 2.0", [](float a) { return 1.0f + 2.0f; }, 7.89f);
+  //benchmark<10000000>("rand() / abs(a*2)", [](float a) { return (rand()%RAND_MAX) / std::abs(a*2); }, 7.89f);
+  //benchmark<1000000>("max(abs(a), 15.0f) - 8.0f", [](float a) { return std::max(std::abs(a), 15.0f) - 8.0f; }, 7.89f);
 
-  //getchar();
-  //return 0;
+  getchar();
+  return 0;
   
   auto input = "getFoo().getX.max(15)";
   bool execute = true;
@@ -115,19 +117,17 @@ void benchmark(const std::string& script, std::function<float(float)> native, fl
   auto lexerResult = lexer.parse(script);
   auto parser = nanoexpr::parser::Parser();
   auto parseResult = parser.parse(lexerResult.tokens);
-  
+
+  vm::Engine engine;
+  vm::Environment env = engine.createEnvironment();
+  env.set("a", arg, false);
+
+  auto result = parseResult.ast->compile(&env);
+
   for (const auto& token : lexerResult.tokens)
     std::cout << token << std::endl;
   std::cout << std::endl << parseResult.ast->textual() << std::endl;
   
-  vm::Functions* functions = new vm::Functions();
-  vm::Enums* enums = new vm::Enums();
-
-  vm::Environment env(functions, enums);
-  env.set("a", arg);
-
-  auto result = parseResult.ast->compile(&env);
-
   float results[2];
   std::chrono::steady_clock::duration elapsed[2];
 

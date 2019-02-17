@@ -1,3 +1,4 @@
+#include <iostream>
 #include "nanoexpr.h"
 
 using namespace nanoexpr;
@@ -33,8 +34,6 @@ std::ostream& operator<<(std::ostream& out, const TypedValue& value)
 
 #define CATCH_CONFIG_RUNNER
 #include "catch.hpp"
-
-#include <variant>
 
 #pragma mark Utility functions
 

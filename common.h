@@ -35,6 +35,7 @@ namespace nanoexpr
     POINTER,
 
     FIRST_CUSTOM_TYPE = 1024,
+    LAST_CUSTOM_TYPE = 2048,
 
     NONE
   };
@@ -50,9 +51,7 @@ namespace nanoexpr
     integral_t integral;
     bool boolean;
     const void* ptr;
-
-    uint64_t data__;
-
+    
     Value(integral_t integral) : integral(integral) { }
     Value(real_t real) : real(real) { }
     Value(bool boolean) : boolean(boolean) { }
@@ -88,7 +87,18 @@ namespace nanoexpr
     TypedValue(ValueType type, Value value) : value(value), type(type) { }
 
     //TODO: unsure if this is defined since some bytes of data__ could not be initialized
-    bool operator==(const TypedValue& tv) const { return type == tv.type && value.data__ == tv.value.data__; }
+    bool operator==(const TypedValue& tv) const {
+      if (tv.type == type)
+      {
+        if (type == ValueType::INTEGRAL) return tv.value.i() == value.i();
+        else if (type == ValueType::REAL) return tv.value.r() == value.r();
+        else if (type == ValueType::BOOL) return tv.value.b() == value.b();
+        else if (type == ValueType::STRING) return tv.value.str() == value.str();
+        else if (type >= ValueType::FIRST_CUSTOM_TYPE && type <= ValueType::LAST_CUSTOM_TYPE) return tv.value.ptr == value.ptr;
+      }
+      
+      return false;
+    }
 
     template<typename T, std::enable_if_t<std::is_pointer_v<T>>* = nullptr> TypedValue(T ptr, ValueType type) : value(ptr), type(type) { }
   };
