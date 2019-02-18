@@ -365,6 +365,9 @@ namespace nanoexpr::lex
     token_list tokens;
     bool success;
     std::string message;
+
+    operator bool() const { return success; }
+    operator const token_list&() const { return tokens; }
   };
 
 
@@ -390,7 +393,7 @@ nanoexpr::lex::Lexer::Lexer() noexcept
   rules.emplace_back(new OperatorRule(TokenType::OPERATOR, false,
                                       {
                                         "+", "-", "*", "/", "%",
-                                        "||", "&&", "!", "~", "|", "&"
+                                        "||", "&&", "!", "~", "|", "&",
                                         "==", "!=", ">=", "<=", ">", "<"
                                       }
   ));

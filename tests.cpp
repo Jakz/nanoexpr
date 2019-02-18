@@ -121,7 +121,7 @@ void parserShouldFail(const std::initializer_list<std::string>& inputs)
   for (const auto& input : inputs)
   {
     auto result = parse(input);
-    if (result.success) 
+    if (result) 
       FAIL("parser should fail for input string '" + input + "' but it was\n" + result.ast->textual());
   }
 }
@@ -264,7 +264,7 @@ TEST_CASE("parsing")
 
   SECTION("function calls")
   {
-    SECTION("unterminated sequences are erroneous")
+    SECTION("unterminated or bogus sequences are erroneous")
     {
       parserShouldFail({ "foo.", "foo(" });
       parserShouldFail({ "foo.123", "foo(123" });

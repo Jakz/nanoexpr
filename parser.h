@@ -20,6 +20,7 @@ namespace nanoexpr
       CompileResult() noexcept : success(false) { }
 
       operator bool() const { return success; }
+      operator const vm::lambda_t&() const { return lambda; }
 
       static const char* nameForType(ValueType type)
       {
@@ -256,8 +257,10 @@ namespace nanoexpr
     struct ParserResult
     {
       std::unique_ptr<ast::Expression> ast;
-      bool success;
       std::string message;
+
+      operator bool() const { return ast != nullptr; }
+      const ast::Expression* operator->() const { return ast.get(); }
     };
 
     class Parser
@@ -545,12 +548,12 @@ namespace nanoexpr
         
         if (ast->isFailure())
         {
-          ParserResult result = { nullptr, false, static_cast<Failure*>(ast)->message() };
+          ParserResult result = { nullptr, static_cast<Failure*>(ast)->message() };
           delete ast;
           return result;
         }
         else
-          return { std::unique_ptr<ast::Expression>(ast), true, "" };
+          return { std::unique_ptr<ast::Expression>(ast) };
       }
     };
   }

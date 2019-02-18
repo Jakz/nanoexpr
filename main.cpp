@@ -37,7 +37,7 @@ int main()
   //getchar();
   //return 0;
   
-  auto input = "foo(123,)"; // "getFoo().getX.max(15)";
+  auto input = "wizard.book.researching_spell.school == School::NATURE";
   bool execute = true;
 
   nanoexpr::lex::Lexer lexer;
@@ -46,12 +46,12 @@ int main()
   for (const auto& token : lexResult.tokens)
     std::cout << token << std::endl;
 
-  if (!lexResult.success)
+  if (!lexResult)
     std::cout << "lexer error: " << lexResult.message << std::endl;
   else if (execute)
   {    
     nanoexpr::parser::Parser parser;
-    auto parseResult =  parser.parse(lexResult.tokens);
+    auto parseResult =  parser.parse(lexResult);
 
     vm::Engine engine;
 
@@ -71,10 +71,10 @@ int main()
 
     env.set("a", 2.21f);
 
-    if (parseResult.success)
+    if (parseResult)
     {
-      auto compileResult = parseResult.ast->compile(&env);
-      std::cout << std::endl << parseResult.ast->textual();
+      auto compileResult = parseResult->compile(&env);
+      std::cout << std::endl << parseResult->textual();
 
       if (compileResult)
       {
