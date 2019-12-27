@@ -392,9 +392,9 @@ nanoexpr::lex::Lexer::Lexer() noexcept
   rules.emplace_back(new StringRule());
   rules.emplace_back(new OperatorRule(TokenType::OPERATOR, false,
                                       {
-                                        "+", "-", "*", "/", "%",
+                                        "+", "-", "*", "/", "%", "^",
                                         "||", "&&", "!", "~", "|", "&",
-                                        "==", "!=", ">=", "<=", ">", "<"
+                                        "==", "!=", ">=", "<=", ">", "<",
                                       }
   ));
   rules.emplace_back(new OperatorRule(TokenType::SYMBOL, false, { "(", ")", ",", "::", "."/*, ":", "?" */ }));

@@ -298,7 +298,7 @@ namespace nanoexpr
         return false;
       }
 
-      auto previous() const
+      decltype(Parser::token) previous() const
       {
         return std::prev(token);
       }
@@ -369,7 +369,11 @@ namespace nanoexpr
       ast::Expression* addition() { return binary<&Parser::multiplication>(TokenType::OPERATOR, { "+", "-" }); }
 
       /* multiplication = unary ( [* / %] unary )* */
-      ast::Expression* multiplication() { return binary<&Parser::unary>(TokenType::OPERATOR, { "*", "/", "%" }); }
+      ast::Expression* multiplication() { return binary<&Parser::elevation>(TokenType::OPERATOR, { "*", "/", "%" }); }
+
+      /* elevation = unary ( ^ unary )* */
+      ast::Expression* elevation() { return binary<&Parser::unary>(TokenType::OPERATOR, { "^" }); }
+
 
       /* unary = ( [- ~ !] primary )*/
       ast::Expression* unary()

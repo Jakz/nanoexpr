@@ -27,8 +27,15 @@ struct Foo
   int x, y;
 };
 
+void test();
+
 int main()
 {
+  /*test();
+  getchar();
+  return 0;*/
+  
+  
   //benchmark<1000000>("(1.0 / (a + 1.0) + 2.0 / (a + 2.0) + 3.0 / (a + 3.0))", [](float a) { return 1.0f / (a + 1.0f) + 2.0f / (a + 2.0f) + 3.0f / (a + 3.0f); }, 2.21f);
   //benchmark<100000>("1.0 + 2.0", [](float a) { return 1.0f + 2.0f; }, 7.89f);
   //benchmark<10000000>("rand() / abs(a*2)", [](float a) { return (rand()%RAND_MAX) / std::abs(a*2); }, 7.89f);
@@ -36,6 +43,12 @@ int main()
 
   //getchar();
   //return 0;
+  nanoexpr::Compiler compiler;
+  auto result2 = compiler.compileToAST("sin(x)^ 2");
+  std::cout << result2.ast->textual() << std::endl;
+  getchar();
+
+  return 0;
   
   auto input = "wizard.book.researching_spell.school == School::NATURE";
   bool execute = true;
@@ -165,16 +178,3 @@ void benchmark(const std::string& script, std::function<float(float)> native, fl
   std::cout << "ratio is " << (int)(100* nano_cast(elapsed[0]).count() / nano_cast(elapsed[1]).count()) << "%" << std::endl;
   std::cout << results[0] << " ~= " << results[1] << std::endl;
 }
-
-/*
-
-Your code is meant to print the set according to a sorting comparator. In case of `std::less` you specified an operator< but for `std::greater` you need to specify a `operator>` since its implementation invokes it.
-
-Now some suggestions:
-
-- use emplace functions when available to enable possible optimizations, eg. `setP2.emplace(1,3)`
-- a loop like yours inside printSet is verbose and can be changed with a call to `std::copy`.
-- since std::less is the default Compare for std::set you don't need to build another one when `std::is_same<U, std::less<Point2D>>` holds
-- for negated comparators (like `std::greater` when set Compare is `std::less`) you can use `rbegin` and `rend` to iterate in the opposite direction
-
-*/

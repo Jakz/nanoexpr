@@ -279,6 +279,10 @@ void nanoexpr::vm::Functions::init()
   registerNullary("rand", VT::INTEGRAL, false, [] { return Value(rand() % RAND_MAX); });
   registerFreeUnaryFunction<real_t, real_t, std::abs>("abs", VT::REAL, VT::REAL);
   registerFreeUnaryFunction<integral_t, integral_t, std::abs>("abs", ValueType::INTEGRAL, VT::INTEGRAL);
+
+  registerFreeBinaryFunction<real_t, real_t, real_t, std::pow>("pow", VT::REAL, VT::REAL, VT::REAL);
+  registerFreeBinaryFunction<real_t, real_t, real_t, std::pow>("^", VT::REAL, VT::REAL, VT::REAL);
+
   registerFreeUnaryFunction<real_t, real_t, std::sqrt>("sqrt", VT::REAL, VT::REAL);
   registerFreeUnaryFunction<real_t, real_t, std::cbrt>("cbrt", VT::REAL, VT::REAL);
 
